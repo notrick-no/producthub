@@ -28,9 +28,11 @@ _SCALAR_FIELDS = [
     "url",
     "founder",
     "monthly_visits",
+    "status",
     "problem",
     "user_reviews",
     "marketing_strategy",
+    "tech_analysis",
 ]
 
 
@@ -52,9 +54,11 @@ def _to_read(product: Product) -> ProductRead:
         url=product.url,
         founder=product.founder,
         monthly_visits=product.monthly_visits,
+        status=product.status,
         problem=product.problem,
         user_reviews=product.user_reviews,
         marketing_strategy=product.marketing_strategy,
+        tech_analysis=product.tech_analysis,
         created_at=product.created_at,
         updated_at=product.updated_at,
         categories=[CategoryRead.model_validate(link.category) for link in links],

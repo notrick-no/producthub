@@ -13,10 +13,15 @@
   - monthly_visits 存原始整数,禁止负数
 """
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # 返回给前端的 Schema 需要能直接读 ORM 对象(model_config 被子类继承)
+
+# 产品状态:单选,允许取值见 第二版产品-开发中.md(空 = 未设置/调研早期)
+PRODUCT_STATUSES = ("调研中", "已上线", "快速增长", "稳定", "衰退", "已关闭")
+ProductStatus = Literal["调研中", "已上线", "快速增长", "稳定", "衰退", "已关闭"]
 
 
 class CategoryBase(BaseModel):
@@ -57,13 +62,22 @@ class ProductBase(BaseModel):
     url: str | None = Field(default=None, max_length=2048)
     founder: str | None = None
     monthly_visits: int | None = Field(default=None, ge=0)
+    status: ProductStatus | None = None  # 产品状态
     problem: str | None = None
     user_reviews: str | None = None
     marketing_strategy: str | None = None
+    tech_analysis: str | None = None  # 产品技术分析
 
     @field_validator("url", mode="before")
     @classmethod
     def _blank_url_to_none(cls, v):
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
+
+    @field_validator("tech_analysis", mode="before")
+    @classmethod
+    def _blank_tech_analysis_to_none(cls, v):
         if isinstance(v, str) and not v.strip():
             return None
         return v

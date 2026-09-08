@@ -30,9 +30,11 @@ class Product(Base):
     url: Mapped[str | None] = mapped_column(String(2048), unique=True)
     founder: Mapped[str | None] = mapped_column(Text)  # 创始人信息(自由文本)
     monthly_visits: Mapped[int | None] = mapped_column(Integer)  # 网站月活量
+    status: Mapped[str | None] = mapped_column(String(20))  # 产品状态(见 schemas.PRODUCT_STATUSES)
     problem: Mapped[str | None] = mapped_column(Text)  # 产品解决的问题
     user_reviews: Mapped[str | None] = mapped_column(Text)  # 网站的用户评价
     marketing_strategy: Mapped[str | None] = mapped_column(Text)  # 网站的营销策略
+    tech_analysis: Mapped[str | None] = mapped_column(Text)  # 产品技术分析
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

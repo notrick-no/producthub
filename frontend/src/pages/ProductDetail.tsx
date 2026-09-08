@@ -13,6 +13,7 @@ import {
 import { ArrowLeftOutlined, DeleteOutlined, EditOutlined, GlobalOutlined } from '@ant-design/icons'
 import { deleteProduct, getProduct } from '../api/resources'
 import type { Product } from '../types'
+import { STATUS_COLOR } from '../statusMeta'
 
 const nf = new Intl.NumberFormat('zh-CN')
 
@@ -115,6 +116,7 @@ export default function ProductDetail() {
           </div>
 
           <Space size={[4, 4]} wrap>
+            {product.status && <Tag color={STATUS_COLOR[product.status]}>{product.status}</Tag>}
             {product.categories.length > 0 ? (
               product.categories.map((c) => (
                 <Tag key={c.id} color="blue">
@@ -149,6 +151,7 @@ export default function ProductDetail() {
       <Section title="产品解决的问题" content={product.problem} />
       <Section title="网站的用户评价" content={product.user_reviews} />
       <Section title="网站的营销策略" content={product.marketing_strategy} />
+      <Section title="产品技术分析" content={product.tech_analysis} />
     </Space>
   )
 }

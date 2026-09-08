@@ -15,7 +15,8 @@ import {
 } from 'antd'
 import { PlusOutlined } from '@ant-design/icons'
 import { createCategory, createProduct, getProduct, listCategories, updateProduct } from '../api/resources'
-import type { Category, ProductPayload } from '../types'
+import type { Category, ProductPayload, ProductStatus } from '../types'
+import { PRODUCT_STATUSES } from '../types'
 
 const { TextArea } = Input
 
@@ -24,9 +25,11 @@ interface FormValues {
   url?: string
   founder?: string
   monthly_visits?: number | null
+  status?: ProductStatus | null
   problem?: string
   user_reviews?: string
   marketing_strategy?: string
+  tech_analysis?: string
   category_ids?: number[]
 }
 
@@ -38,9 +41,11 @@ function toPayload(values: FormValues): ProductPayload {
     url: text(values.url),
     founder: text(values.founder),
     monthly_visits: values.monthly_visits ?? null,
+    status: values.status ?? null,
     problem: text(values.problem),
     user_reviews: text(values.user_reviews),
     marketing_strategy: text(values.marketing_strategy),
+    tech_analysis: text(values.tech_analysis),
     category_ids: values.category_ids ?? [],
   }
 }
@@ -76,9 +81,11 @@ export default function ProductFormPage() {
           url: p.url ?? '',
           founder: p.founder ?? '',
           monthly_visits: p.monthly_visits,
+          status: p.status ?? null,
           problem: p.problem ?? '',
           user_reviews: p.user_reviews ?? '',
           marketing_strategy: p.marketing_strategy ?? '',
+          tech_analysis: p.tech_analysis ?? '',
           category_ids: p.categories.map((c) => c.id),
         })
       })
@@ -139,7 +146,7 @@ export default function ProductFormPage() {
         form={form}
         layout="vertical"
         onFinish={handleSubmit}
-        initialValues={{ category_ids: [] }}
+        initialValues={{ category_ids: [], status: '调研中' }}
       >
         <Typography.Title level={5}>基础信息</Typography.Title>
         <Form.Item
@@ -164,6 +171,15 @@ export default function ProductFormPage() {
           />
         </Form.Item>
 
+        <Form.Item name="status" label="产品状态" tooltip="空 = 未设置(调研早期)">
+          <Select
+            allowClear
+            style={{ width: 240 }}
+            placeholder="选择当前状态"
+            options={PRODUCT_STATUSES.map((s) => ({ value: s, label: s }))}
+          />
+        </Form.Item>
+
         <Form.Item name="founder" label="创始人信息">
           <TextArea rows={2} placeholder="创始人姓名、简介等(自由文本)" />
         </Form.Item>
@@ -182,6 +198,10 @@ export default function ProductFormPage() {
 
         <Form.Item name="marketing_strategy" label="网站的营销策略">
           <TextArea rows={6} placeholder="它的获客/增长/营销打法" />
+        </Form.Item>
+
+        <Form.Item name="tech_analysis" label="产品技术分析">
+          <TextArea rows={4} placeholder="技术栈、架构、关键实现方式等" />
         </Form.Item>
 
         <Form.Item name="category_ids" label="所属分类">

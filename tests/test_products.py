@@ -183,3 +183,61 @@ class ProductDeleteTest(ApiTestCase):
         detail = self.client.get(f"/api/products/{p['id']}")
         self.assertEqual(detail.status_code, 200)
         self.assertEqual(detail.json()["categories"], [])
+
+
+class ProductStatusAnalysisTest(ApiTestCase):
+    """产品状态(status)与技术分析(tech_analysis)字段。"""
+
+    ALL_STATUSES = ("调研中", "已上线", "快速增长", "稳定", "衰退", "已关闭")
+
+    def test_create_with_status_and_tech_analysis(self):
+        body = self.new_product(
+            "Notion",
+            status="调研中",
+            tech_analysis="React 前端 + Serverless 后端",
+        )
+        self.assertEqual(body["status"], "调研中")
+        self.assertEqual(body["tech_analysis"], "React 前端 + Serverless 后端")
+
+    def test_create_default_is_null(self):
+        body = self.new_product("Notion")
+        self.assertIsNone(body["status"])
+        self.assertIsNone(body["tech_analysis"])
+
+    def test_all_statuses_accepted(self):
+        for s in self.ALL_STATUSES:
+            body = self.new_product(f"p-{s}", status=s)
+            self.assertEqual(body["status"], s)
+
+    def test_patch_status_and_tech_analysis_then_clear(self):
+        pid = self.new_product("Notion")["id"]
+        r = self.client.patch(
+            f"/api/products/{pid}",
+            json={"status": "已上线", "tech_analysis": "Next.js"},
+        )
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["status"], "已上线")
+        self.assertEqual(r.json()["tech_analysis"], "Next.js")
+
+        # 清空:status 用 null,tech_analysis 空串归一为 null
+        r = self.client.patch(
+            f"/api/products/{pid}", json={"status": None, "tech_analysis": ""}
+        )
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertIsNone(r.json()["status"])
+        self.assertIsNone(r.json()["tech_analysis"])
+
+    def test_invalid_status_rejected(self):
+        r = self.client.post("/api/products", json={"name": "x", "status": "乱填"})
+        self.assertEqual(r.status_code, 422)
+        pid = self.new_product("x")["id"]
+        r = self.client.patch(f"/api/products/{pid}", json={"status": "乱填"})
+        self.assertEqual(r.status_code, 422)
+        # 空串也非法(清空要用 null)
+        r = self.client.patch(f"/api/products/{pid}", json={"status": ""})
+        self.assertEqual(r.status_code, 422)
+
+    def test_list_returns_status(self):
+        self.new_product("Notion", status="快速增长")
+        rows = self.client.get("/api/products").json()
+        self.assertEqual(rows[0]["status"], "快速增长")

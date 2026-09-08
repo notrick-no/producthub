@@ -4,6 +4,7 @@ import { App as AntApp, Space, Table, Tag, Typography } from 'antd'
 import type { TableColumnsType } from 'antd'
 import { listProducts } from '../api/resources'
 import type { Product } from '../types'
+import { STATUS_COLOR } from '../statusMeta'
 
 const nf = new Intl.NumberFormat('zh-CN')
 
@@ -85,6 +86,13 @@ export default function ProductList() {
           ))}
         </Space>
       ),
+    },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      width: 96,
+      render: (_, r) =>
+        r.status ? <Tag color={STATUS_COLOR[r.status]}>{r.status}</Tag> : null,
     },
     {
       title: '月活',

@@ -67,9 +67,11 @@ REST 风格,统一前缀 `/api`,请求/响应均为 JSON,字段 snake_case。字
   "url": "notion.so",
   "founder": "Ivan Zhao",
   "monthly_visits": 120000,
+  "status": "快速增长",
   "problem": "个人知识管理碎片化…",
   "user_reviews": null,
   "marketing_strategy": "模板生态 + 社区…",
+  "tech_analysis": "React + Serverless…",
   "created_at": "2026-09-08T18:00:00+08:00",
   "updated_at": "2026-09-08T18:05:00+08:00",
   "categories": [
@@ -84,7 +86,8 @@ REST 风格,统一前缀 `/api`,请求/响应均为 JSON,字段 snake_case。字
 
 ### POST /api/products
 - 请求体:`name` 必填;`url` ≤2048、空串按 null;`monthly_visits` 整数 ≥0;
-  `category_ids: number[]` 可选(默认 `[]`)
+  `status` 六选一(调研中/已上线/快速增长/稳定/衰退/已关闭,可空);
+  `tech_analysis` 可空、空串按 null;`category_ids: number[]` 可选(默认 `[]`)
 - → `201` 返回完整对象(含分类)
 - `400` 某分类 id 不存在(此时不落库)
 
@@ -93,6 +96,7 @@ REST 风格,统一前缀 `/api`,请求/响应均为 JSON,字段 snake_case。字
 
 ### PATCH /api/products/{id}
 - 请求体:任意字段缺席不改动
+- `status` 只接受六档取值,非法值或空串 → `422`;清空用 `null`
 - `category_ids` 三态:
 
   | 传法 | 效果 |
