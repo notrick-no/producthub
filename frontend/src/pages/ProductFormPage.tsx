@@ -17,6 +17,8 @@ import { PlusOutlined } from '@ant-design/icons'
 import { createCategory, createProduct, getProduct, listCategories, updateProduct } from '../api/resources'
 import type { Category, ProductPayload, ProductStatus } from '../types'
 import { PRODUCT_STATUSES } from '../types'
+import MilestoneEditor, { collectMilestones, milestoneToDraft } from '../components/MilestoneEditor'
+import type { MilestoneDraft } from '../components/MilestoneEditor'
 
 const { TextArea } = Input
 
@@ -61,6 +63,7 @@ export default function ProductFormPage() {
   const [categories, setCategories] = useState<Category[]>([])
   const [loadingProduct, setLoadingProduct] = useState(isEdit)
   const [saving, setSaving] = useState(false)
+  const [milestones, setMilestones] = useState<MilestoneDraft[]>([])
 
   // 下拉里"直接新建分类"用的输入框
   const [newCatName, setNewCatName] = useState('')
@@ -88,6 +91,7 @@ export default function ProductFormPage() {
           tech_analysis: p.tech_analysis ?? '',
           category_ids: p.categories.map((c) => c.id),
         })
+        setMilestones(p.milestones.map(milestoneToDraft))
       })
       .catch((err) => {
         message.error(err instanceof Error ? err.message : '加载产品失败')
@@ -119,8 +123,15 @@ export default function ProductFormPage() {
       return // 校验失败,antd 已标红
     }
 
+    const collected = collectMilestones(milestones)
+    if (collected.error) {
+      message.error('发展历程里有没填完的行:请补全「时间 + 事件名」,或删除该行')
+      return
+    }
+
     setSaving(true)
     const payload = toPayload(values)
+    payload.milestones = collected.milestones ?? []
     try {
       const saved = isEdit ? await updateProduct(Number(id), payload) : await createProduct(payload)
       message.success(isEdit ? '已保存修改' : `已创建「${saved.name}」`)
@@ -203,6 +214,14 @@ export default function ProductFormPage() {
         <Form.Item name="tech_analysis" label="产品技术分析">
           <TextArea rows={4} placeholder="技术栈、架构、关键实现方式等" />
         </Form.Item>
+
+        <Divider />
+
+        <Typography.Title level={5}>发展历程</Typography.Title>
+        <Typography.Paragraph type="secondary" style={{ marginTop: -4 }}>
+          产品关键时间点,按时间先后展示。例如:产品成立 / 上线 MVP / 开始收费。
+        </Typography.Paragraph>
+        <MilestoneEditor drafts={milestones} onChange={setMilestones} />
 
         <Form.Item name="category_ids" label="所属分类">
           <Select

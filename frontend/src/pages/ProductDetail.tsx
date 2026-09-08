@@ -8,6 +8,7 @@ import {
   Space,
   Spin,
   Tag,
+  Timeline,
   Typography,
 } from 'antd'
 import { ArrowLeftOutlined, DeleteOutlined, EditOutlined, GlobalOutlined } from '@ant-design/icons'
@@ -19,6 +20,12 @@ const nf = new Intl.NumberFormat('zh-CN')
 
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleString('zh-CN', { dateStyle: 'medium', timeStyle: 'short' })
+}
+
+/** '2024-03-01' → '2024.03';非 1 号则带上日:'2024-03-15' → '2024.03.15' */
+function formatMonthDay(iso: string): string {
+  const [y, m, d] = iso.split('-')
+  return d === '01' ? `${y}.${m}` : `${y}.${m}.${d}`
 }
 
 /** 研究内容块:统一卡片样式,保留换行。 */
@@ -147,6 +154,30 @@ export default function ProductDetail() {
           </Typography.Text>
         </Space>
       </Card>
+
+      {product.milestones.length > 0 && (
+        <Card title="产品发展历程">
+          <Timeline
+            items={product.milestones.map((m) => ({
+              label: (
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  {formatMonthDay(m.date)}
+                </Typography.Text>
+              ),
+              children: (
+                <div>
+                  <Typography.Text strong>{m.title}</Typography.Text>
+                  {m.note && (
+                    <div>
+                      <Typography.Text type="secondary">{m.note}</Typography.Text>
+                    </div>
+                  )}
+                </div>
+              ),
+            }))}
+          />
+        </Card>
+      )}
 
       <Section title="产品解决的问题" content={product.problem} />
       <Section title="网站的用户评价" content={product.user_reviews} />

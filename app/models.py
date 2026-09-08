@@ -10,9 +10,9 @@
   - 除 name 外内容字段都允许为空(调研早期信息可能不全)
   - url 唯一,避免同一网站重复录入
 """
-from datetime import datetime
+from datetime import date, datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Date, DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -44,6 +44,11 @@ class Product(Base):
 
     # 通过关联表访问分类(用 list["ProductCategory"],详见该类定义)
     category_links: Mapped[list["ProductCategory"]] = relationship(
+        back_populates="product", cascade="all, delete-orphan"
+    )
+
+    # 发展历程节点:随产品删除一并删除
+    milestones: Mapped[list["ProductMilestone"]] = relationship(
         back_populates="product", cascade="all, delete-orphan"
     )
 
@@ -86,3 +91,25 @@ class ProductCategory(Base):
 
     product: Mapped[Product] = relationship(back_populates="category_links")
     category: Mapped[Category] = relationship(back_populates="product_links")
+
+
+class ProductMilestone(Base):
+    """产品发展历程里的一条关键节点(Product Timeline)。
+
+    存精确 date;界面按「年月」采集(day 固定为 1 号),需要精确到日也支持。
+    """
+
+    __tablename__ = "product_milestones"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    product_id: Mapped[int] = mapped_column(
+        ForeignKey("products.id", ondelete="CASCADE"), index=True
+    )
+    date: Mapped[date] = mapped_column(Date)
+    title: Mapped[str] = mapped_column(String(255))  # 事件名,如「上线 MVP」
+    note: Mapped[str | None] = mapped_column(Text)  # 补充说明(可选)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    product: Mapped[Product] = relationship(back_populates="milestones")

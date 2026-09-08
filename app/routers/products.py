@@ -17,8 +17,15 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from ..db import get_db
-from ..models import Category, Product, ProductCategory
-from ..schemas import CategoryRead, ProductCreate, ProductRead, ProductUpdate
+from ..models import Category, Product, ProductCategory, ProductMilestone
+from ..schemas import (
+    CategoryRead,
+    MilestoneInput,
+    MilestoneRead,
+    ProductCreate,
+    ProductRead,
+    ProductUpdate,
+)
 
 router = APIRouter(prefix="/api", tags=["products"])
 
@@ -37,17 +44,21 @@ _SCALAR_FIELDS = [
 
 
 def _load_product(db: Session, product_id: int) -> Product | None:
-    """带分类关联一次性取出单个产品,避免懒加载。"""
+    """带分类/发展历程关联一次性取出单个产品,避免懒加载。"""
     return db.scalars(
         select(Product)
         .where(Product.id == product_id)
-        .options(selectinload(Product.category_links).selectinload(ProductCategory.category))
+        .options(
+            selectinload(Product.category_links).selectinload(ProductCategory.category),
+            selectinload(Product.milestones),
+        )
     ).first()
 
 
 def _to_read(product: Product) -> ProductRead:
-    """把 ORM 对象组装成响应 Schema(分类按 category_id 稳定排序)。"""
+    """把 ORM 对象组装成响应 Schema(分类按 category_id、节点按时间稳定排序)。"""
     links = sorted(product.category_links, key=lambda link: link.category_id)
+    milestones = sorted(product.milestones, key=lambda m: (m.date, m.id))
     return ProductRead(
         id=product.id,
         name=product.name,
@@ -62,6 +73,7 @@ def _to_read(product: Product) -> ProductRead:
         created_at=product.created_at,
         updated_at=product.updated_at,
         categories=[CategoryRead.model_validate(link.category) for link in links],
+        milestones=[MilestoneRead.model_validate(m) for m in milestones],
     )
 
 
@@ -90,9 +102,25 @@ def list_products(
             ProductCategory, ProductCategory.product_id == Product.id
         ).where(ProductCategory.category_id == category_id)
     products = db.scalars(
-        stmt.options(selectinload(Product.category_links).selectinload(ProductCategory.category))
+        stmt.options(
+            selectinload(Product.category_links).selectinload(ProductCategory.category),
+            selectinload(Product.milestones),
+        )
     ).all()
     return [_to_read(p) for p in products]
+
+
+def _add_milestones(db: Session, product_id: int, milestones: list[MilestoneInput]) -> None:
+    """把一批输入节点落库(用于新建)。"""
+    for m in milestones:
+        db.add(
+            ProductMilestone(
+                product_id=product_id,
+                date=m.date,
+                title=m.title,
+                note=m.note,
+            )
+        )
 
 
 @router.post("/products", response_model=ProductRead, status_code=201)
@@ -105,6 +133,7 @@ def create_product(body: ProductCreate, db: Session = Depends(get_db)):
 
     for category_id in category_ids:
         db.add(ProductCategory(product_id=product.id, category_id=category_id))
+    _add_milestones(db, product.id, body.milestones)
 
     db.commit()
     return _to_read(_load_product(db, product.id))
@@ -137,6 +166,20 @@ def update_product(
         for category_id in category_ids:
             product.category_links.append(
                 ProductCategory(product_id=product.id, category_id=category_id)
+            )
+
+    # 发展历程:缺席 = 不动;[] / null = 清空;数组 = 整组替换(与分类一致)
+    if "milestones" in payload:
+        product.milestones.clear()
+        db.flush()
+        for m in payload["milestones"] or []:
+            product.milestones.append(
+                ProductMilestone(
+                    product_id=product.id,
+                    date=m["date"],
+                    title=m["title"],
+                    note=m.get("note"),
+                )
             )
 
     for field in _SCALAR_FIELDS:

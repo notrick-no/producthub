@@ -16,6 +16,22 @@ export interface CategoryPayload {
   description?: string | null
 }
 
+/** 一条发展历程节点(读回)。date 为 ISO 'YYYY-MM-DD'(界面按年月采集,日固定 01)。 */
+export interface ProductMilestone {
+  id: number
+  date: string
+  title: string
+  note?: string | null
+  created_at: string
+}
+
+/** 提交发展历程节点:date 传 'YYYY-MM'(补到 1 号)或 'YYYY-MM-DD'。 */
+export interface MilestoneInput {
+  date: string
+  title: string
+  note?: string | null
+}
+
 export interface Product {
   id: number
   name: string
@@ -30,6 +46,7 @@ export interface Product {
   created_at: string
   updated_at: string
   categories: Category[]
+  milestones: ProductMilestone[]
 }
 
 /** 新建时可用(必填 name);编辑时用 Partial 即可 */
@@ -45,4 +62,6 @@ export interface ProductPayload {
   tech_analysis?: string | null
   /** 缺席=不动;[] = 清空;含 id = 替换 */
   category_ids?: number[]
+  /** 缺席=不动;[] = 清空;数组 = 整组替换 */
+  milestones?: MilestoneInput[]
 }
