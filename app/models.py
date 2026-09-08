@@ -11,8 +11,9 @@
   - url 唯一,避免同一网站重复录入
 """
 from datetime import date, datetime
+from decimal import Decimal
 
-from sqlalchemy import Date, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Date, DateTime, ForeignKey, Integer, Numeric, String, Text, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -49,6 +50,11 @@ class Product(Base):
 
     # 发展历程节点:随产品删除一并删除
     milestones: Mapped[list["ProductMilestone"]] = relationship(
+        back_populates="product", cascade="all, delete-orphan"
+    )
+
+    # 分级定价档位:随产品删除一并删除
+    price_tiers: Mapped[list["ProductPriceTier"]] = relationship(
         back_populates="product", cascade="all, delete-orphan"
     )
 
@@ -113,3 +119,27 @@ class ProductMilestone(Base):
     )
 
     product: Mapped[Product] = relationship(back_populates="milestones")
+
+
+class ProductPriceTier(Base):
+    """分级定价里的一档(Free / Pro / 团队版…)。
+
+    amount 数字(0 = 免费),可空(面议/定制);cycle 如 月/年/一次性。
+    币种不单独建模,需要时写在 note 里。
+    """
+
+    __tablename__ = "product_price_tiers"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    product_id: Mapped[int] = mapped_column(
+        ForeignKey("products.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str | None] = mapped_column(String(100))  # 档位名,如 Pro
+    amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))  # 单价
+    cycle: Mapped[str | None] = mapped_column(String(20))  # 月 / 年 / 一次性
+    note: Mapped[str | None] = mapped_column(Text)  # 备注(可选)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    product: Mapped[Product] = relationship(back_populates="price_tiers")

@@ -17,11 +17,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from ..db import get_db
-from ..models import Category, Product, ProductCategory, ProductMilestone
+from ..models import Category, Product, ProductCategory, ProductMilestone, ProductPriceTier
 from ..schemas import (
     CategoryRead,
     MilestoneInput,
     MilestoneRead,
+    PriceTierInput,
+    PriceTierRead,
     ProductCreate,
     ProductRead,
     ProductUpdate,
@@ -51,6 +53,7 @@ def _load_product(db: Session, product_id: int) -> Product | None:
         .options(
             selectinload(Product.category_links).selectinload(ProductCategory.category),
             selectinload(Product.milestones),
+            selectinload(Product.price_tiers),
         )
     ).first()
 
@@ -59,6 +62,7 @@ def _to_read(product: Product) -> ProductRead:
     """把 ORM 对象组装成响应 Schema(分类按 category_id、节点按时间稳定排序)。"""
     links = sorted(product.category_links, key=lambda link: link.category_id)
     milestones = sorted(product.milestones, key=lambda m: (m.date, m.id))
+    tiers = sorted(product.price_tiers, key=lambda t: t.id)  # 保持录入顺序
     return ProductRead(
         id=product.id,
         name=product.name,
@@ -74,6 +78,7 @@ def _to_read(product: Product) -> ProductRead:
         updated_at=product.updated_at,
         categories=[CategoryRead.model_validate(link.category) for link in links],
         milestones=[MilestoneRead.model_validate(m) for m in milestones],
+        price_tiers=[PriceTierRead.model_validate(t) for t in tiers],
     )
 
 
@@ -105,6 +110,7 @@ def list_products(
         stmt.options(
             selectinload(Product.category_links).selectinload(ProductCategory.category),
             selectinload(Product.milestones),
+            selectinload(Product.price_tiers),
         )
     ).all()
     return [_to_read(p) for p in products]
@@ -123,6 +129,20 @@ def _add_milestones(db: Session, product_id: int, milestones: list[MilestoneInpu
         )
 
 
+def _add_price_tiers(db: Session, product_id: int, tiers: list[PriceTierInput]) -> None:
+    """把一批定价档位落库(用于新建)。"""
+    for t in tiers:
+        db.add(
+            ProductPriceTier(
+                product_id=product_id,
+                name=t.name,
+                amount=t.amount,
+                cycle=t.cycle,
+                note=t.note,
+            )
+        )
+
+
 @router.post("/products", response_model=ProductRead, status_code=201)
 def create_product(body: ProductCreate, db: Session = Depends(get_db)):
     category_ids = _require_categories_exist(db, body.category_ids)
@@ -134,6 +154,7 @@ def create_product(body: ProductCreate, db: Session = Depends(get_db)):
     for category_id in category_ids:
         db.add(ProductCategory(product_id=product.id, category_id=category_id))
     _add_milestones(db, product.id, body.milestones)
+    _add_price_tiers(db, product.id, body.price_tiers)
 
     db.commit()
     return _to_read(_load_product(db, product.id))
@@ -179,6 +200,21 @@ def update_product(
                     date=m["date"],
                     title=m["title"],
                     note=m.get("note"),
+                )
+            )
+
+    # 分级定价:同款三态(缺席 = 不动;[] = 清空;数组 = 整组替换)
+    if "price_tiers" in payload:
+        product.price_tiers.clear()
+        db.flush()
+        for t in payload["price_tiers"] or []:
+            product.price_tiers.append(
+                ProductPriceTier(
+                    product_id=product.id,
+                    name=t.get("name"),
+                    amount=t.get("amount"),
+                    cycle=t.get("cycle"),
+                    note=t.get("note"),
                 )
             )
 

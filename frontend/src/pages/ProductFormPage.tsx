@@ -19,6 +19,8 @@ import type { Category, ProductPayload, ProductStatus } from '../types'
 import { PRODUCT_STATUSES } from '../types'
 import MilestoneEditor, { collectMilestones, milestoneToDraft } from '../components/MilestoneEditor'
 import type { MilestoneDraft } from '../components/MilestoneEditor'
+import PriceTierEditor, { collectPriceTiers, priceTierToDraft } from '../components/PriceTierEditor'
+import type { PriceTierDraft } from '../components/PriceTierEditor'
 
 const { TextArea } = Input
 
@@ -64,6 +66,7 @@ export default function ProductFormPage() {
   const [loadingProduct, setLoadingProduct] = useState(isEdit)
   const [saving, setSaving] = useState(false)
   const [milestones, setMilestones] = useState<MilestoneDraft[]>([])
+  const [priceTiers, setPriceTiers] = useState<PriceTierDraft[]>([])
 
   // 下拉里"直接新建分类"用的输入框
   const [newCatName, setNewCatName] = useState('')
@@ -92,6 +95,7 @@ export default function ProductFormPage() {
           category_ids: p.categories.map((c) => c.id),
         })
         setMilestones(p.milestones.map(milestoneToDraft))
+        setPriceTiers(p.price_tiers.map(priceTierToDraft))
       })
       .catch((err) => {
         message.error(err instanceof Error ? err.message : '加载产品失败')
@@ -132,6 +136,7 @@ export default function ProductFormPage() {
     setSaving(true)
     const payload = toPayload(values)
     payload.milestones = collected.milestones ?? []
+    payload.price_tiers = collectPriceTiers(priceTiers).price_tiers ?? []
     try {
       const saved = isEdit ? await updateProduct(Number(id), payload) : await createProduct(payload)
       message.success(isEdit ? '已保存修改' : `已创建「${saved.name}」`)
@@ -222,6 +227,14 @@ export default function ProductFormPage() {
           产品关键时间点,按时间先后展示。例如:产品成立 / 上线 MVP / 开始收费。
         </Typography.Paragraph>
         <MilestoneEditor drafts={milestones} onChange={setMilestones} />
+
+        <Divider />
+
+        <Typography.Title level={5}>分级定价</Typography.Title>
+        <Typography.Paragraph type="secondary" style={{ marginTop: -4 }}>
+          分档记录价格:金额留空表示面议/定制,填 0 表示免费;币种可写在备注里。
+        </Typography.Paragraph>
+        <PriceTierEditor drafts={priceTiers} onChange={setPriceTiers} />
 
         <Form.Item name="category_ids" label="所属分类">
           <Select

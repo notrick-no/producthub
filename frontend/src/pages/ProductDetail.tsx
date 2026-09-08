@@ -13,7 +13,7 @@ import {
 } from 'antd'
 import { ArrowLeftOutlined, DeleteOutlined, EditOutlined, GlobalOutlined } from '@ant-design/icons'
 import { deleteProduct, getProduct } from '../api/resources'
-import type { Product } from '../types'
+import type { PriceTier, Product } from '../types'
 import { STATUS_COLOR } from '../statusMeta'
 
 const nf = new Intl.NumberFormat('zh-CN')
@@ -26,6 +26,14 @@ function formatDate(iso: string): string {
 function formatMonthDay(iso: string): string {
   const [y, m, d] = iso.split('-')
   return d === '01' ? `${y}.${m}` : `${y}.${m}.${d}`
+}
+
+/** 一档价格显示成「金额/周期」;空金额 = 面议;0 = 免费。 */
+function priceAmount(t: PriceTier): string {
+  if (t.amount == null) return '面议/定制'
+  if (t.amount === 0) return '免费'
+  const cycle = t.cycle ? ` / ${t.cycle}` : ''
+  return `${t.amount}${cycle}`
 }
 
 /** 研究内容块:统一卡片样式,保留换行。 */
@@ -176,6 +184,40 @@ export default function ProductDetail() {
               ),
             }))}
           />
+        </Card>
+      )}
+
+      {product.price_tiers.length > 0 && (
+        <Card title="分级定价">
+          <Space direction="vertical" size={8} style={{ width: '100%' }}>
+            {product.price_tiers.map((t) => (
+              <div
+                key={t.id}
+                style={{
+                  border: '1px solid #f0f0f0',
+                  borderRadius: 8,
+                  padding: '8px 12px',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  gap: 16,
+                }}
+              >
+                <div>
+                  <Typography.Text strong>{t.name || '未命名档'}</Typography.Text>
+                  {t.note && (
+                    <div>
+                      <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+                        {t.note}
+                      </Typography.Text>
+                    </div>
+                  )}
+                </div>
+                <Typography.Text strong style={{ whiteSpace: 'nowrap' }}>
+                  {priceAmount(t)}
+                </Typography.Text>
+              </div>
+            ))}
+          </Space>
         </Card>
       )}
 

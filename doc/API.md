@@ -79,6 +79,9 @@ REST 风格,统一前缀 `/api`,请求/响应均为 JSON,字段 snake_case。字
   ],
   "milestones": [
     { "id": 5, "date": "2024-03-01", "title": "产品成立", "note": null, "created_at": "2026-09-08T18:00:00+08:00" }
+  ],
+  "price_tiers": [
+    { "id": 1, "name": "Pro", "amount": 120, "cycle": "年", "note": "含高级功能", "created_at": "2026-09-08T18:00:00+08:00" }
   ]
 }
 ```
@@ -91,14 +94,18 @@ REST 风格,统一前缀 `/api`,请求/响应均为 JSON,字段 snake_case。字
 - 请求体:`name` 必填;`url` ≤2048、空串按 null;`monthly_visits` 整数 ≥0;
   `status` 六选一(调研中/已上线/快速增长/稳定/衰退/已关闭,可空);
   `tech_analysis` 可空、空串按 null;`category_ids: number[]` 可选(默认 `[]`);
-  `milestones: MilestoneInput[]` 可选(默认 `[]`)
+  `milestones: MilestoneInput[]` 可选(默认 `[]`);`price_tiers: PriceTierInput[]` 可选(默认 `[]`)
 - MilestoneInput = `{ date, title, note? }`:`date` 传 `YYYY-MM`(自动补当月 1 号)或 `YYYY-MM-DD`;
-  `title` 非空 ≤255;`note` 可空、空串按 null。校验失败整体 `422`
-- → `201` 返回完整对象(含分类、发展历程)
+  `title` 非空 ≤255;`note` 可空、空串按 null
+- PriceTierInput = `{ name?, amount?, cycle?, note? }`:全字段可选、空串按 null;
+  `amount` 数字 ≥0(存两位小数;`0` = 免费,空 = 面议/定制);`name` ≤100;`cycle` ≤20
+  (常用 月/年/一次性,不强制枚举);`note` 备注/币种。任一档字段校验失败整体 `422`
+- → `201` 返回完整对象(含分类、发展历程、定价档位)
 - `400` 某分类 id 不存在(此时不落库)
 
 ### GET /api/products/{id}
-- → `200` / `404`;读回的产品里 `milestones` 按 (date, id) **时间升序**排列
+- → `200` / `404`;读回的产品里 `milestones` 按 (date, id) **时间升序**排列,
+  `price_tiers` 按 id **录入顺序**排列
 
 ### PATCH /api/products/{id}
 - 请求体:任意字段缺席不改动
@@ -112,10 +119,11 @@ REST 风格,统一前缀 `/api`,请求/响应均为 JSON,字段 snake_case。字
   | `[1, 2]` | **替换**为这组(校验 id 存在,否则 `400` 不落库) |
 
 - `milestones` 同款三态:缺席 = 不动;`[]` = 清空;数组 = **整组替换**(校验失败 `422`,任何改动都不落库)
+- `price_tiers` 同款三态:缺席 = 不动;`[]` = 清空;数组 = **整组替换**(校验失败 `422`,任何改动都不落库)
 - → `200` / `404` / `400`
 
 ### DELETE /api/products/{id}
-- → `204` / `404`;级联清掉该产品的全部标签行与发展历程节点
+- → `204` / `404`;级联清掉该产品的全部标签行、发展历程节点与定价档位
 
 ---
 

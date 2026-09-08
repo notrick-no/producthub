@@ -32,6 +32,24 @@ export interface MilestoneInput {
   note?: string | null
 }
 
+/** 分级定价里的一档(读回)。币种不建模,写在 note 里。 */
+export interface PriceTier {
+  id: number
+  name?: string | null
+  amount?: number | null // 0 = 免费;空 = 面议/定制
+  cycle?: string | null // 月 / 年 / 一次性
+  note?: string | null
+  created_at: string
+}
+
+/** 提交一档价格:全部可选,空档位会被忽略。 */
+export interface PriceTierInput {
+  name?: string | null
+  amount?: number | null
+  cycle?: string | null
+  note?: string | null
+}
+
 export interface Product {
   id: number
   name: string
@@ -47,6 +65,7 @@ export interface Product {
   updated_at: string
   categories: Category[]
   milestones: ProductMilestone[]
+  price_tiers: PriceTier[]
 }
 
 /** 新建时可用(必填 name);编辑时用 Partial 即可 */
@@ -64,4 +83,6 @@ export interface ProductPayload {
   category_ids?: number[]
   /** 缺席=不动;[] = 清空;数组 = 整组替换 */
   milestones?: MilestoneInput[]
+  /** 缺席=不动;[] = 清空;数组 = 整组替换 */
+  price_tiers?: PriceTierInput[]
 }
