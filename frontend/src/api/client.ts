@@ -12,10 +12,12 @@ type RequestInitLike = Omit<RequestInit, 'headers'> & {
 
 export async function api<T>(path: string, init: RequestInitLike = {}): Promise<T> {
   const { headers, body, ...rest } = init
+  // FormData(multipart 上传)由 fetch 自动带 boundary,不能手动设 Content-Type
+  const contentType = body && !(body instanceof FormData) ? 'application/json' : undefined
   const res = await fetch(`${BASE}${path}`, {
     ...rest,
     headers: {
-      ...(body ? { 'Content-Type': 'application/json' } : {}),
+      ...(contentType ? { 'Content-Type': contentType } : {}),
       ...headers,
     },
     body,
@@ -46,6 +48,11 @@ export function get<T>(path: string): Promise<T> {
 
 export function post<T>(path: string, body: unknown): Promise<T> {
   return api<T>(path, { method: 'POST', body: JSON.stringify(body) })
+}
+
+/** multipart 上传(文件),Content-Type 交给 fetch 处理。 */
+export function postForm<T>(path: string, form: FormData): Promise<T> {
+  return api<T>(path, { method: 'POST', body: form })
 }
 
 export function patch<T>(path: string, body: unknown): Promise<T> {

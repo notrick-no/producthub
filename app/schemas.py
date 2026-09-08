@@ -128,6 +128,37 @@ class PriceTierRead(BaseModel):
     created_at: datetime
 
 
+class ProductImageRead(BaseModel):
+    """一张产品素材图片(元数据;`path` 即图片地址)。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    path: str  # /uploads/<随机名>.<扩展名>,可直接当 img src
+    filename: str | None  # 上传时的原始文件名,展示用
+    content_type: str
+    size: int  # 字节
+    caption: str | None  # 图片说明
+    sort_order: int
+    created_at: datetime
+
+
+class ImageUpdate(BaseModel):
+    """PATCH 一张图片:改说明 / 排序。缺席字段不动。"""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    caption: str | None = None
+    sort_order: int | None = Field(default=None, ge=0)
+
+    @field_validator("caption", mode="before")
+    @classmethod
+    def _blank_caption_to_none(cls, v):
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
+
+
 class ProductBase(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
@@ -188,3 +219,4 @@ class ProductRead(ProductBase):
     categories: list[CategoryRead] = Field(default_factory=list)
     milestones: list[MilestoneRead] = Field(default_factory=list)
     price_tiers: list[PriceTierRead] = Field(default_factory=list)
+    images: list[ProductImageRead] = Field(default_factory=list)

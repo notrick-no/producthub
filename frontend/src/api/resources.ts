@@ -1,7 +1,13 @@
 /** 业务资源 API:统一走 client.ts 的封装。 */
 
-import { del, get, patch, post } from './client'
-import type { Category, CategoryPayload, Product, ProductPayload } from '../types'
+import { del, get, patch, post, postForm } from './client'
+import type {
+  Category,
+  CategoryPayload,
+  Product,
+  ProductImage,
+  ProductPayload,
+} from '../types'
 
 // ---------- Products ----------
 export function listProducts(categoryId?: number): Promise<Product[]> {
@@ -24,6 +30,25 @@ export function updateProduct(id: number, payload: Partial<ProductPayload>): Pro
 
 export function deleteProduct(id: number): Promise<void> {
   return del(`/products/${id}`)
+}
+
+// ---------- Product images(产品素材) ----------
+export function uploadProductImage(productId: number, file: File): Promise<ProductImage> {
+  const form = new FormData()
+  form.append('file', file, file.name)
+  return postForm<ProductImage>(`/products/${productId}/images`, form)
+}
+
+export function updateProductImage(
+  productId: number,
+  imageId: number,
+  payload: { caption?: string | null; sort_order?: number },
+): Promise<ProductImage> {
+  return patch<ProductImage>(`/products/${productId}/images/${imageId}`, payload)
+}
+
+export function deleteProductImage(productId: number, imageId: number): Promise<void> {
+  return del(`/products/${productId}/images/${imageId}`)
 }
 
 // ---------- Categories ----------

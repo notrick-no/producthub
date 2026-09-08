@@ -15,6 +15,7 @@ import { ArrowLeftOutlined, DeleteOutlined, EditOutlined, GlobalOutlined } from 
 import { deleteProduct, getProduct } from '../api/resources'
 import type { PriceTier, Product } from '../types'
 import { STATUS_COLOR } from '../statusMeta'
+import ProductImagesCard from '../components/ProductImagesCard'
 
 const nf = new Intl.NumberFormat('zh-CN')
 
@@ -59,6 +60,12 @@ export default function ProductDetail() {
 
   const [product, setProduct] = useState<Product | null>(null)
   const [loading, setLoading] = useState(true)
+
+  // 轻量刷新:素材增删/排序/改说明后调用,不闪整页 loading
+  const refresh = () =>
+    getProduct(Number(id))
+      .then(setProduct)
+      .catch(() => undefined)
 
   const load = () => {
     setLoading(true)
@@ -161,6 +168,14 @@ export default function ProductDetail() {
             收录于 {formatDate(product.created_at)} · 更新于 {formatDate(product.updated_at)}
           </Typography.Text>
         </Space>
+      </Card>
+
+      <Card title="产品素材">
+        <ProductImagesCard
+          productId={product.id}
+          images={product.images}
+          onReload={refresh}
+        />
       </Card>
 
       {product.milestones.length > 0 && (

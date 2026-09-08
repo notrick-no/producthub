@@ -12,6 +12,7 @@
 """
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -28,6 +29,10 @@ TEST_DB_URL = os.getenv(
 
 # 必须在导入 app.db 之前覆盖连接串,否则引擎会连到开发库
 os.environ["DATABASE_URL"] = TEST_DB_URL
+
+# 上传目录也指向临时目录,测试不碰项目根的 uploads/(须在 import app 前设置)
+_TMP_UPLOAD = tempfile.mkdtemp(prefix="ph-test-uploads-")
+os.environ["UPLOAD_DIR"] = _TMP_UPLOAD
 
 from sqlalchemy import text  # noqa: E402
 from sqlalchemy.engine import make_url  # noqa: E402
@@ -74,11 +79,12 @@ class ApiTestCase(unittest.TestCase):
 
     # ---------- 数据清理 ----------
     def _truncate_all(self) -> None:
-        """清空三张表并重置自增 id,保证每个用例从空白库开始。"""
+        """清空全部表并重置自增 id,保证每个用例从空白库开始。"""
         with SessionLocal() as db:
             db.execute(
                 text(
-                    "TRUNCATE product_categories, products, categories "
+                    "TRUNCATE product_categories, product_milestones, "
+                    "product_price_tiers, product_images, products, categories "
                     "RESTART IDENTITY CASCADE"
                 )
             )

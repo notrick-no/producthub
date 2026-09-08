@@ -19,6 +19,9 @@ __pycache__/
 .vscode/*
 !.vscode/extensions.json
 
+# 上传的图片文件(元数据在数据库,文件本体不入库)
+uploads/
+
 # 测试产物
 .pytest_cache/
 .coverage

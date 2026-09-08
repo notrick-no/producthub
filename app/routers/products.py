@@ -12,22 +12,34 @@ PATCH 的 category_ids 语义:
   []          = 清空分类
   [x, y]      = 校验都存在后替换成这组
 """
-from fastapi import APIRouter, Depends, HTTPException
+from uuid import uuid4
+
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from ..db import get_db
-from ..models import Category, Product, ProductCategory, ProductMilestone, ProductPriceTier
+from ..models import (
+    Category,
+    Product,
+    ProductCategory,
+    ProductImage,
+    ProductMilestone,
+    ProductPriceTier,
+)
 from ..schemas import (
     CategoryRead,
+    ImageUpdate,
     MilestoneInput,
     MilestoneRead,
     PriceTierInput,
     PriceTierRead,
     ProductCreate,
+    ProductImageRead,
     ProductRead,
     ProductUpdate,
 )
+from ..storage import MAX_IMAGE_SIZE, UPLOAD_DIR, image_ext
 
 router = APIRouter(prefix="/api", tags=["products"])
 
@@ -54,6 +66,7 @@ def _load_product(db: Session, product_id: int) -> Product | None:
             selectinload(Product.category_links).selectinload(ProductCategory.category),
             selectinload(Product.milestones),
             selectinload(Product.price_tiers),
+            selectinload(Product.images),
         )
     ).first()
 
@@ -63,6 +76,7 @@ def _to_read(product: Product) -> ProductRead:
     links = sorted(product.category_links, key=lambda link: link.category_id)
     milestones = sorted(product.milestones, key=lambda m: (m.date, m.id))
     tiers = sorted(product.price_tiers, key=lambda t: t.id)  # 保持录入顺序
+    images = sorted(product.images, key=lambda i: (i.sort_order, i.id))
     return ProductRead(
         id=product.id,
         name=product.name,
@@ -79,6 +93,7 @@ def _to_read(product: Product) -> ProductRead:
         categories=[CategoryRead.model_validate(link.category) for link in links],
         milestones=[MilestoneRead.model_validate(m) for m in milestones],
         price_tiers=[PriceTierRead.model_validate(t) for t in tiers],
+        images=[ProductImageRead.model_validate(i) for i in images],
     )
 
 
@@ -111,6 +126,7 @@ def list_products(
             selectinload(Product.category_links).selectinload(ProductCategory.category),
             selectinload(Product.milestones),
             selectinload(Product.price_tiers),
+            selectinload(Product.images),
         )
     ).all()
     return [_to_read(p) for p in products]
@@ -233,3 +249,110 @@ def delete_product(product_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="产品不存在")
     db.delete(product)
     db.commit()
+
+
+def _get_image(db: Session, product_id: int, image_id: int) -> ProductImage:
+    """按产品找一张图片;不属于该产品时同样 404(不暴露它属于谁)。"""
+    img = db.scalar(
+        select(ProductImage).where(
+            ProductImage.id == image_id, ProductImage.product_id == product_id
+        )
+    )
+    if img is None:
+        raise HTTPException(status_code=404, detail="图片不存在")
+    return img
+
+
+def _disk_path(image_path: str) -> str:
+    """把 DB 里的服务路径转成 uploads/ 下的文件名(带基本校验)。"""
+    if not image_path.startswith("/uploads/"):
+        raise HTTPException(status_code=500, detail="图片路径异常")
+    name = image_path.rsplit("/", 1)[-1]
+    # 落盘名是随机生成的纯文件名,不允许带路径穿越
+    if "/" in name or "\\" in name or name in ("", ".", ".."):
+        raise HTTPException(status_code=500, detail="图片路径异常")
+    return name
+
+
+def _original_filename(filename: str | None) -> str | None:
+    """取用户文件名的纯 basename(仅作展示,不参与落盘命名)。"""
+    if not filename:
+        return None
+    base = filename.replace("\\", "/").rsplit("/", 1)[-1].strip()
+    return (base or None)[:255]
+
+
+@router.post("/products/{product_id}/images", response_model=ProductImageRead, status_code=201)
+def upload_image(
+    product_id: int, file: UploadFile = File(...), db: Session = Depends(get_db)
+):
+    """上传一张图片:校验类型/大小 → 落盘 uploads/ → 入库元数据。"""
+    if db.get(Product, product_id) is None:
+        raise HTTPException(status_code=404, detail="产品不存在")
+
+    ext = image_ext(file.content_type or "")
+    if ext is None:
+        raise HTTPException(status_code=400, detail="只支持 JPG / PNG / GIF / WebP 图片")
+
+    data = file.file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="空文件不能上传")
+    if len(data) > MAX_IMAGE_SIZE:
+        raise HTTPException(status_code=400, detail="图片不能超过 10 MB")
+
+    name = uuid4().hex + ext
+    (UPLOAD_DIR / name).write_bytes(data)
+
+    # 排到该产品当前最后一位
+    last = db.scalars(
+        select(ProductImage.sort_order)
+        .where(ProductImage.product_id == product_id)
+        .order_by(ProductImage.sort_order.desc(), ProductImage.id.desc())
+        .limit(1)
+    ).first()
+    image = ProductImage(
+        product_id=product_id,
+        path=f"/uploads/{name}",
+        filename=_original_filename(file.filename),
+        content_type=file.content_type,
+        size=len(data),
+        caption=None,
+        sort_order=(last + 1) if last is not None else 0,
+    )
+    db.add(image)
+    try:
+        db.commit()
+    except Exception:
+        (UPLOAD_DIR / name).unlink(missing_ok=True)  # 入库失败则回收文件
+        raise
+    db.refresh(image)
+    return image
+
+
+@router.patch(
+    "/products/{product_id}/images/{image_id}", response_model=ProductImageRead
+)
+def update_image(
+    product_id: int,
+    image_id: int,
+    body: ImageUpdate,
+    db: Session = Depends(get_db),
+):
+    """改一张图片的说明 / 排序;缺席字段不动。"""
+    image = _get_image(db, product_id, image_id)
+    for field in ("caption", "sort_order"):
+        if field in body.model_dump(exclude_unset=True):
+            setattr(image, field, getattr(body, field))
+    db.commit()
+    db.refresh(image)
+    return image
+
+
+@router.delete("/products/{product_id}/images/{image_id}", status_code=204)
+def delete_image(product_id: int, image_id: int, db: Session = Depends(get_db)):
+    """删掉一行图片:先删库里的元数据行,成功后再删磁盘文件。"""
+    image = _get_image(db, product_id, image_id)
+    name = _disk_path(image.path)
+    db.delete(image)
+    db.commit()
+    (UPLOAD_DIR / name).unlink(missing_ok=True)

@@ -58,6 +58,11 @@ class Product(Base):
         back_populates="product", cascade="all, delete-orphan"
     )
 
+    # 产品素材图片:随产品删除一并删除(文件本体见 app/storage.py 的 uploads/)
+    images: Mapped[list["ProductImage"]] = relationship(
+        back_populates="product", cascade="all, delete-orphan"
+    )
+
 
 class Category(Base):
     """自定义产品分类。"""
@@ -143,3 +148,29 @@ class ProductPriceTier(Base):
     )
 
     product: Mapped[Product] = relationship(back_populates="price_tiers")
+
+
+class ProductImage(Base):
+    """产品素材里的一张图片(**只存元数据**,文件本体落盘 uploads/)。
+
+    `path` 存服务路径(如 `/uploads/ab12cd.png`),浏览器直接当图片地址用;
+    `filename` 是上传时的原始文件名,仅作展示,不参与落盘命名(落盘名随机生成)。
+    """
+
+    __tablename__ = "product_images"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    product_id: Mapped[int] = mapped_column(
+        ForeignKey("products.id", ondelete="CASCADE"), index=True
+    )
+    path: Mapped[str] = mapped_column(String(2048))  # /uploads/<随机名>.<扩展名>
+    filename: Mapped[str | None] = mapped_column(String(255))  # 原始文件名(展示用)
+    content_type: Mapped[str] = mapped_column(String(100))
+    size: Mapped[int] = mapped_column(Integer)  # 字节
+    caption: Mapped[str | None] = mapped_column(Text)  # 图片说明(可选)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)  # 同产品内排序
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    product: Mapped[Product] = relationship(back_populates="images")

@@ -50,6 +50,18 @@ export interface PriceTierInput {
   note?: string | null
 }
 
+/** 一张产品素材图片(元数据)。path 即图片地址,可直接当 img src。 */
+export interface ProductImage {
+  id: number
+  path: string
+  filename?: string | null
+  content_type: string
+  size: number
+  caption?: string | null
+  sort_order: number
+  created_at: string
+}
+
 export interface Product {
   id: number
   name: string
@@ -66,6 +78,7 @@ export interface Product {
   categories: Category[]
   milestones: ProductMilestone[]
   price_tiers: PriceTier[]
+  images: ProductImage[]
 }
 
 /** 新建时可用(必填 name);编辑时用 Partial 即可 */
