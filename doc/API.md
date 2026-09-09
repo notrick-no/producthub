@@ -1,4 +1,4 @@
-# Producthut API
+# producthub API
 
 REST 风格,统一前缀 `/api`,请求/响应均为 JSON,字段 snake_case。字段语义与校验见
 `doc/架构.md` 的"字段契约"。
@@ -13,19 +13,108 @@ REST 风格,统一前缀 `/api`,请求/响应均为 JSON,字段 snake_case。字
 | 201 | 新建成功 |
 | 204 | 删除成功(无响应体) |
 | 400 | 业务校验失败(如引用了不存在的分类) |
+| 401 | 未登录 / 会话失效 / 账号被禁用(见「认证」) |
+| 403 | 已登录但无权限(改密门禁未过 / 非管理员) |
 | 404 | 资源不存在 |
-| 409 | 唯一约束冲突(分类名 / 产品 url 重复) |
+| 409 | 唯一约束冲突(分类名 / 产品 url / 邮箱重复) |
 | 422 | 请求体校验失败(Pydantic) |
+| 503 | 邮件(SMTP)未配置或发送失败(建号 / 重置时) |
 
 **错误体**:非 2xx 一律返回 `{"detail": "<原因>"}`,`detail` 为可直接展示的中文文案。
 
 **PATCH 语义**:只更新请求体里出现的键;缺席键一律不改动。
 
-**健康检查**:`GET /api/health` → `{"status": "ok"}`。
+**健康检查**:`GET /api/health` → `{"status": "ok"}`,公开。
+
+### 认证(第三版)
+
+- 业务接口(**Products / Categories / Users**)都要登录:请求带会话 cookie
+  `producthub_session`(登录时 `Set-Cookie`,`HttpOnly + SameSite=Lax`,仅 https 站点带 `Secure`)。
+  未登录一律 `401`;被管理员禁用 → `401`;登录但未过改密门禁 / 非管理员 → `403`。
+- `Auth` 一节内的登录/登出/改密接口,以及 `/api/health`、`/uploads`(产品图片)保持公开。
+- **前端无需手工管理 token**:cookie 由浏览器自动携带,`client.ts` 收到 401 会清登录态并跳登录页。
+- 没有公开注册页。**第一个管理员**由启动引导自动创建(库空 + env `ADMIN_EMAIL/ADMIN_PASSWORD`,
+  见 `doc/部署.md`);后续员工账号由管理员在本界面创建并邮件邀请。
+
+---
+
+## Auth 账号与登录
+
+**用户响应形状**(下称 `User`;`UserRead`,不含任何密码/邀请 token 字段):
+
+```json
+{
+  "id": 1,
+  "email": "zhang@example.com",
+  "name": "张三",
+  "department": "市场部",
+  "role": "admin",
+  "is_active": true,
+  "must_change_password": false,
+  "password_set": true,
+  "created_at": "2026-09-10T18:00:00+08:00",
+  "updated_at": "2026-09-10T18:00:00+08:00"
+}
+```
+
+`role ∈ {admin, employee}`;`password_set` 由后端派生(哈希非空 = 已设过密码);受邀未设密的员工
+该字段为 `false`。
+
+### POST /api/auth/login
+- 请求体:`{"email": "...", "password": "..."}`。邮箱大小写不敏感(服务端统一存小写)。
+- → `200` 返回 `User`,并 `Set-Cookie: producthub_session`(30 天)。
+- `401` 邮箱或密码不正确 / 账号已被禁用。
+
+### POST /api/auth/logout
+- → `204`,删除当前会话并清 cookie(会话已失效也返回 204)。
+
+### GET /api/auth/me
+- 宽松读取当前登录用户 → `200` `User`;未登录 / 会话失效 / 被禁用 → `401`。
+  前端据此在刷新页面后恢复登录态。
+
+### POST /api/auth/password
+- 请求体:`{"old_password": "...", "new_password": "..."}`,`new_password` 8–72 位。
+- 改自己密码:保留当前会话,**删除该账号的其它会话**(其它登录端会被登出)。
+  若 `must_change_password=true`(被重置过密码),改完自动清除该标记。
+- → `200` / `400` 原密码不正确。
+
+### POST /api/auth/set-password(公开,邀请设密)
+- 请求体:`{"token": "<邮件链接里的邀请码>", "new_password": "..."}`,token 一次性、72h。
+- → `200` 返回 `User`,并自动登录(`Set-Cookie`);前端设完直接进首页。
+- `400` 邀请链接无效或已过期。
+
+---
+
+## Users 员工账号(仅管理员)
+
+**整个 `/api/users` 只允许 `role=admin`**:非管理员 → `403`,未登录 → `401`。
+
+### GET /api/users
+- 全部账号(含禁用、含受邀未设密的),按 id 升序 → `200` `User[]`。
+
+### POST /api/users(创建 + 邀请)
+- 请求体:`{"name": "...", "email": "...", "department": "可选"}`,`name` ≤255 必填,`email` ≤255。
+- 建一个 `role=employee` 的启用账号,生成一次性邀请 token(72h)并发**邀请邮件**。
+- → `201` 返回 `User`(`password_set=false`;受邀者设密前**无法登录**)。
+- `409` 该邮箱已注册(大小写不敏感);`422` 邮箱格式不合法 / 名字为空。
+- `503` SMTP 未配置或发信失败 —— **此时不落库**,不留半截账号。
+
+### PATCH /api/users/{id}
+- 请求体任意缺席:本期支持 `name` / `department`(传 `null` 清空)/ `is_active`。
+- 停用(`is_active=false`)效果 = 离职冻结:该账号**所有会话立即失效**(踢下线),无法再登录。
+- 护栏:`400` 不能把**最后一个启用中的管理员**禁用(避免管理员全体锁死)。邮箱与 role 不可改。
+- → `200` `User` / `404` 账号不存在。
+
+### POST /api/users/{id}/reset-password
+- 重置为随机**临时密码**并发送邮件 → 该账号 `must_change_password=true`(首次登录强制改密)+
+  **删除全部会话**。
+- → `200` `{"ok": true, "email": "..."}` / `404` / `400`(最后一个启用中的管理员)/ `503`(SMTP 未配置)。
 
 ---
 
 ## Categories 分类
+
+> 需登录(`401` 未登录);分类由全员共享。
 
 **响应形状**(单条):
 
@@ -57,6 +146,8 @@ REST 风格,统一前缀 `/api`,请求/响应均为 JSON,字段 snake_case。字
 ---
 
 ## Products 产品
+
+> 需登录(`401` 未登录);产品记录由全员共享(登录只做门禁,不区分归属)。
 
 **响应形状**(单条,`categories` 为完整对象列表):
 

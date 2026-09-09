@@ -12,10 +12,14 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..db import get_db
+from ..deps import get_current_user
 from ..models import Category
 from ..schemas import CategoryCreate, CategoryRead, CategoryUpdate
 
-router = APIRouter(prefix="/api", tags=["categories"])
+# 需要登录(第三版)
+router = APIRouter(
+    prefix="/api", tags=["categories"], dependencies=[Depends(get_current_user)]
+)
 
 
 @router.get("/categories", response_model=list[CategoryRead])

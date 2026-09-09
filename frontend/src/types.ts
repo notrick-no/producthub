@@ -1,5 +1,45 @@
 /** 与后端 app/schemas.py 对齐的 TS 类型(字段全 snake_case)。 */
 
+// ---------- 账号 / 鉴权(第三版)----------
+// 邮箱登录 + 管理员账号管理。字段与后端 schemas.UserRead / models.User 对齐。
+
+export const USER_ROLES = ['admin', 'employee'] as const
+export type UserRole = (typeof USER_ROLES)[number]
+
+export interface User {
+  id: number
+  email: string
+  name: string
+  department?: string | null
+  role: UserRole
+  is_active: boolean
+  /** 重置密码后为 true:必须先改密才能用业务功能 */
+  must_change_password: boolean
+  /** 是否已设过密码(邀请未完成 = false) */
+  password_set: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface LoginPayload {
+  email: string
+  password: string
+}
+
+/** 管理员创建员工账号(POST /api/users)。邮箱即唯一登录 ID。 */
+export interface UserPayload {
+  name: string
+  email: string
+  department?: string | null
+}
+
+/** PATCH /api/users/{id}:缺席不改;本期支持 name / department / is_active。 */
+export interface UserPatchPayload {
+  name?: string
+  department?: string | null
+  is_active?: boolean
+}
+
 /** 产品状态取值,须与后端 schemas.PRODUCT_STATUSES 保持一致(生命周期四档)。 */
 export const PRODUCT_STATUSES = ['萌芽期', '成长期', '成熟期', '衰退期'] as const
 export type ProductStatus = (typeof PRODUCT_STATUSES)[number]

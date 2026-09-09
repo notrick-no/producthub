@@ -5,3 +5,4 @@ psycopg[binary]>=3.2
 python-dotenv>=1.0
 python-multipart>=0.0.9
 alembic>=1.13
+bcrypt>=4.1
