@@ -108,6 +108,9 @@ def _send_resend_api(to_email: str, subject: str, html_body: str) -> None:
         data=json.dumps(payload).encode("utf-8"),
         headers={
             "Content-Type": "application/json",
+            # Resend 前面是 Cloudflare:urllib 默认 UA "Python-urllib/3.10" 会被
+            # 浏览器完整性检查拦成 403 error 1010,必须给个正常 UA。
+            "User-Agent": "producthub/2.0 (+https://github.com/notrick-no/producthub)",
             "Authorization": f"Bearer {os.getenv('RESEND_API_KEY', '')}",
         },
         method="POST",
