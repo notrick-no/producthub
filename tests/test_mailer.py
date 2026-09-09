@@ -110,6 +110,10 @@ class MailerTransportTests(unittest.TestCase):
             calls["url"] = req.full_url
             calls["method"] = req.get_method()
             calls["auth"] = req.get_header("Authorization")
+            # Request.headers 的 key 已归一(如 "User-agent"),get_header 精确名查不到,直接遍历
+            calls["ua"] = next(
+                (v for k, v in req.headers.items() if k.lower() == "user-agent"), None
+            )
             calls["body"] = json.loads(req.data.decode("utf-8"))
 
             class _Resp:
@@ -143,6 +147,8 @@ class MailerTransportTests(unittest.TestCase):
         self.assertEqual(calls["url"], "https://api.resend.com/emails")
         self.assertEqual(calls["method"], "POST")
         self.assertEqual(calls["auth"], "Bearer re_test")
+        self.assertIsNotNone(calls["ua"], "必须带自定义 UA,否则 Cloudflare 拦 403 1010")
+        self.assertNotIn("Python-urllib", calls["ua"])
         self.assertEqual(calls["body"]["to"], ["lin@example.test"])
         self.assertEqual(calls["body"]["subject"], "测试主题")
         self.assertIn("noreply@example.test", calls["body"]["from"])
