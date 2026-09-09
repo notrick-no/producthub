@@ -1,9 +1,9 @@
 """真实邮件发送(标准库 smtplib),用于邀请设密与重置密码。
 
 配置从环境变量读取(**函数内 os.getenv**,便于测试中途覆盖;.env 加载复用 app/db.py):
-  SMTP_HOST / SMTP_PORT(默认 587)/ SMTP_USERNAME / SMTP_PASSWORD / SMTP_FROM
+  SMTP_HOST / SMTP_PORT(默认 587;设 465 = SMTPS 隐式 TLS)/ SMTP_USERNAME / SMTP_PASSWORD / SMTP_FROM
   SMTP_FROM_NAME(可选,发件人显示名,默认 producthub)
-  SMTP_STARTTLS:默认开,设 "0" 关闭(自建/内网 SMTP 可关)
+  SMTP_STARTTLS:仅 587 等普通端口生效,默认开,设 "0" 关闭(自建/内网 SMTP 可关;465 自动走 SMTP_SSL,不适用)
   APP_BASE_URL:邮件里邀请链接的前缀(默认 http://localhost:5173)
 
 SMTP_HOST 或 SMTP_FROM 缺任一 → MailNotConfigured;发送失败 → MailSendError。
@@ -60,9 +60,13 @@ def _send(to_email: str, subject: str, html_body: str) -> None:
     msg.add_alternative(html_body, subtype="html")
 
     try:
-        with smtplib.SMTP(host, port, timeout=15) as smtp:
+        if port == 465:  # 端口 465 = SMTPS 隐式 TLS,不需要 STARTTLS
+            smtp = smtplib.SMTP_SSL(host, port, timeout=15)
+        else:  # 587 等普通端口:默认 STARTTLS,可设 SMTP_STARTTLS="0" 关闭
+            smtp = smtplib.SMTP(host, port, timeout=15)
             if os.getenv("SMTP_STARTTLS", "1") == "1":
                 smtp.starttls()
+        with smtp:
             if username and password:
                 smtp.login(username, password)
             smtp.send_message(msg)
