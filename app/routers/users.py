@@ -58,7 +58,7 @@ def create_user(body: UserCreate, db: Session = Depends(get_db)):
     if not mailer.is_mail_configured():
         raise HTTPException(
             status_code=503,
-            detail="SMTP 未配置,无法发送邀请邮件,请在环境变量配置 SMTP_HOST 与 SMTP_FROM",
+            detail="邮件未配置,无法发送邀请:请在环境变量配置 SMTP_HOST+SMTP_FROM,或 RESEND_API_KEY+SMTP_FROM",
         )
 
     user = User(
@@ -131,7 +131,7 @@ def reset_password(user_id: int, db: Session = Depends(get_db)):
     if not mailer.is_mail_configured():
         raise HTTPException(
             status_code=503,
-            detail="SMTP 未配置,无法发送邮件,请在环境变量配置 SMTP_HOST 与 SMTP_FROM",
+            detail="邮件未配置,无法发送重置邮件:请在环境变量配置 SMTP_HOST+SMTP_FROM,或 RESEND_API_KEY+SMTP_FROM",
         )
 
     temp = make_temp_password()

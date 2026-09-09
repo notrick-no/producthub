@@ -1,4 +1,6 @@
-"""mailer._send 传输层选择:587+STARTTLS / 465 隐式 TLS / SMTP_STARTTLS="0" 明文。"""
+"""mailer._send 传输层选择:587+STARTTLS / 465 隐式 TLS / SMTP_STARTTLS="0" 明文 / Resend API。"""
+import io
+import json
 import os
 import unittest
 from unittest import mock
@@ -98,6 +100,71 @@ class MailerTransportTests(unittest.TestCase):
         with mock.patch.dict(os.environ, env, clear=False):
             with self.assertRaises(mailer.MailNotConfigured):
                 mailer._send("to@example.test", "subject", "<p>hi</p>")
+
+
+    def test_resend_api_used_when_key_set(self):
+        """有 RESEND_API_KEY → 走 Resend HTTP API,不碰 smtplib。"""
+        calls = {}
+
+        def fake_urlopen(req, timeout=None):
+            calls["url"] = req.full_url
+            calls["method"] = req.get_method()
+            calls["auth"] = req.get_header("Authorization")
+            calls["body"] = json.loads(req.data.decode("utf-8"))
+
+            class _Resp:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *exc):
+                    return False
+
+                def read(self):
+                    return b'{"id":"ok"}'
+
+            return _Resp()
+
+        def _boom(*args, **kwargs):
+            raise AssertionError("配了 API key 不应走 smtplib")
+
+        env = {
+            "SMTP_FROM": "noreply@example.test",
+            "SMTP_FROM_NAME": "潮汐基石producthub",
+            "RESEND_API_KEY": "re_test",
+        }
+        with (
+            mock.patch.object(mailer.urllib.request, "urlopen", fake_urlopen),
+            mock.patch.object(mailer.smtplib, "SMTP", _boom),
+            mock.patch.object(mailer.smtplib, "SMTP_SSL", _boom),
+            mock.patch.dict(os.environ, env, clear=False),
+        ):
+            mailer._send("lin@example.test", "测试主题", "<p>hi</p>")
+
+        self.assertEqual(calls["url"], "https://api.resend.com/emails")
+        self.assertEqual(calls["method"], "POST")
+        self.assertEqual(calls["auth"], "Bearer re_test")
+        self.assertEqual(calls["body"]["to"], ["lin@example.test"])
+        self.assertEqual(calls["body"]["subject"], "测试主题")
+        self.assertIn("noreply@example.test", calls["body"]["from"])
+
+    def test_resend_api_http_error_raises_mailsend(self):
+        def fake_urlopen(req, timeout=None):
+            raise mailer.urllib.error.HTTPError(
+                "https://api.resend.com/emails", 401, "Unauthorized", {}, io.BytesIO(b'{"message":"no"}')
+            )
+
+        env = {"SMTP_FROM": "a@b.test", "RESEND_API_KEY": "re_x"}
+        with (
+            mock.patch.object(mailer.urllib.request, "urlopen", fake_urlopen),
+            mock.patch.dict(os.environ, env, clear=False),
+        ):
+            with self.assertRaises(mailer.MailSendError):
+                mailer._send("to@x.test", "s", "<p>x</p>")
+
+    def test_configured_via_api_key_without_smtp_host(self):
+        env = {"SMTP_FROM": "a@b.test", "RESEND_API_KEY": "re_x", "SMTP_HOST": ""}
+        with mock.patch.dict(os.environ, env, clear=False):
+            self.assertTrue(mailer.is_mail_configured())
 
 
 if __name__ == "__main__":
