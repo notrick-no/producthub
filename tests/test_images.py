@@ -49,8 +49,9 @@ class UploadTest(ApiTestCase):
         self.assertEqual(img["filename"], "shot.png")
         self.assertEqual(img["content_type"], "image/png")
         self.assertEqual(img["size"], len(PNG_BYTES))
-        self.assertEqual(img["sort_order"], 0)
-        self.assertIsNone(img["caption"])
+        # 已无说明/排序字段
+        self.assertNotIn("caption", img)
+        self.assertNotIn("sort_order", img)
         # path 是可访问的 /uploads/ 地址,文件确实落盘
         self.assertTrue(img["path"].startswith("/uploads/"))
         name = img["path"].rsplit("/", 1)[-1]
@@ -64,12 +65,11 @@ class UploadTest(ApiTestCase):
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.content, PNG_BYTES)
 
-    def test_upload_appends_sort_order_and_shows_in_product(self):
+    def test_multiple_uploads_show_in_product_insertion_order(self):
         pid = self.new_product("Notion")["id"]
         first = _upload(self.client, pid, "a.png").json()
         second = _upload(self.client, pid, "b.png").json()
-        self.assertEqual(first["sort_order"], 0)
-        self.assertEqual(second["sort_order"], 1)
+        # 图片无排序字段,展示顺序即录入顺序(按 id 升序)
         self.assertEqual([i["id"] for i in _images_of(self.client, pid)], [first["id"], second["id"]])
 
     def test_bad_uploads_rejected(self):
@@ -87,49 +87,6 @@ class UploadTest(ApiTestCase):
 
     def test_upload_to_missing_product_404(self):
         r = _upload(self.client, 9999)
-        self.assertEqual(r.status_code, 404, r.text)
-
-
-class ImageUpdateTest(ApiTestCase):
-    def setUp(self) -> None:
-        super().setUp()
-        self.pid = self.new_product("Notion")["id"]
-        self.img_id = _upload(self.client, self.pid).json()["id"]
-
-    def test_patch_caption_and_sort(self):
-        second = _upload(self.client, self.pid).json()
-        r = self.client.patch(
-            f"/api/products/{self.pid}/images/{self.img_id}",
-            json={"caption": "首页截图", "sort_order": 2},
-        )
-        self.assertEqual(r.status_code, 200, r.text)
-        self.assertEqual(r.json()["caption"], "首页截图")
-        # 第一张排到 2、第二张仍是 1 → 详情里第二张在前
-        order = [i["id"] for i in _images_of(self.client, self.pid)]
-        self.assertEqual(order, [second["id"], self.img_id])
-
-    def test_patch_absent_keeps_fields(self):
-        self.client.patch(
-            f"/api/products/{self.pid}/images/{self.img_id}", json={"caption": "图"}
-        )
-        r = self.client.patch(f"/api/products/{self.pid}/images/{self.img_id}", json={})
-        self.assertEqual(r.status_code, 200, r.text)
-        self.assertEqual(r.json()["caption"], "图")  # 空请求体不改任何字段
-
-    def test_patch_blank_caption_clears(self):
-        self.client.patch(
-            f"/api/products/{self.pid}/images/{self.img_id}", json={"caption": "图"}
-        )
-        r = self.client.patch(
-            f"/api/products/{self.pid}/images/{self.img_id}", json={"caption": "  "}
-        )
-        self.assertEqual(r.json()["caption"], None)
-
-    def test_patch_unknown_image_404(self):
-        other = self.new_product("别的")["id"]
-        r = self.client.patch(
-            f"/api/products/{other}/images/{self.img_id}", json={"caption": "x"}
-        )
         self.assertEqual(r.status_code, 404, r.text)
 
 
@@ -160,7 +117,7 @@ class ImageCascadeTest(ApiTestCase):
         self.client.delete(f"/api/products/{pid}")
         self.assertEqual(_count_rows(), 0)
 
-    def test_list_includes_images_sorted(self):
+    def test_list_includes_images_in_insertion_order(self):
         pid = self.new_product("A")["id"]
         _upload(self.client, pid, "b.png")
         _upload(self.client, pid, "a.png")

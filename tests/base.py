@@ -83,8 +83,8 @@ class ApiTestCase(unittest.TestCase):
         with SessionLocal() as db:
             db.execute(
                 text(
-                    "TRUNCATE product_categories, product_milestones, "
-                    "product_price_tiers, product_images, products, categories "
+                    "TRUNCATE product_categories, product_price_tiers, "
+                    "product_images, products, categories "
                     "RESTART IDENTITY CASCADE"
                 )
             )

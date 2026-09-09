@@ -10,10 +10,10 @@
   - 除 name 外内容字段都允许为空(调研早期信息可能不全)
   - url 唯一,避免同一网站重复录入
 """
-from datetime import date, datetime
+from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import Date, DateTime, ForeignKey, Integer, Numeric, String, Text, func
+from sqlalchemy import DateTime, ForeignKey, Integer, Numeric, String, Text, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -45,11 +45,6 @@ class Product(Base):
 
     # 通过关联表访问分类(用 list["ProductCategory"],详见该类定义)
     category_links: Mapped[list["ProductCategory"]] = relationship(
-        back_populates="product", cascade="all, delete-orphan"
-    )
-
-    # 发展历程节点:随产品删除一并删除
-    milestones: Mapped[list["ProductMilestone"]] = relationship(
         back_populates="product", cascade="all, delete-orphan"
     )
 
@@ -104,28 +99,6 @@ class ProductCategory(Base):
     category: Mapped[Category] = relationship(back_populates="product_links")
 
 
-class ProductMilestone(Base):
-    """产品发展历程里的一条关键节点(Product Timeline)。
-
-    存精确 date;界面按「年月」采集(day 固定为 1 号),需要精确到日也支持。
-    """
-
-    __tablename__ = "product_milestones"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    product_id: Mapped[int] = mapped_column(
-        ForeignKey("products.id", ondelete="CASCADE"), index=True
-    )
-    date: Mapped[date] = mapped_column(Date)
-    title: Mapped[str] = mapped_column(String(255))  # 事件名,如「上线 MVP」
-    note: Mapped[str | None] = mapped_column(Text)  # 补充说明(可选)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
-
-    product: Mapped[Product] = relationship(back_populates="milestones")
-
-
 class ProductPriceTier(Base):
     """分级定价里的一档(Free / Pro / 团队版…)。
 
@@ -155,6 +128,7 @@ class ProductImage(Base):
 
     `path` 存服务路径(如 `/uploads/ab12cd.png`),浏览器直接当图片地址用;
     `filename` 是上传时的原始文件名,仅作展示,不参与落盘命名(落盘名随机生成)。
+    图片无排序、无说明;展示顺序即录入顺序(按 id 升序)。
     """
 
     __tablename__ = "product_images"
@@ -167,8 +141,6 @@ class ProductImage(Base):
     filename: Mapped[str | None] = mapped_column(String(255))  # 原始文件名(展示用)
     content_type: Mapped[str] = mapped_column(String(100))
     size: Mapped[int] = mapped_column(Integer)  # 字节
-    caption: Mapped[str | None] = mapped_column(Text)  # 图片说明(可选)
-    sort_order: Mapped[int] = mapped_column(Integer, default=0)  # 同产品内排序
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

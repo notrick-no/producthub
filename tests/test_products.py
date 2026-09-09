@@ -188,15 +188,15 @@ class ProductDeleteTest(ApiTestCase):
 class ProductStatusAnalysisTest(ApiTestCase):
     """产品状态(status)与技术分析(tech_analysis)字段。"""
 
-    ALL_STATUSES = ("调研中", "已上线", "快速增长", "稳定", "衰退", "已关闭")
+    ALL_STATUSES = ("萌芽期", "成长期", "成熟期", "衰退期")
 
     def test_create_with_status_and_tech_analysis(self):
         body = self.new_product(
             "Notion",
-            status="调研中",
+            status="成长期",
             tech_analysis="React 前端 + Serverless 后端",
         )
-        self.assertEqual(body["status"], "调研中")
+        self.assertEqual(body["status"], "成长期")
         self.assertEqual(body["tech_analysis"], "React 前端 + Serverless 后端")
 
     def test_create_default_is_null(self):
@@ -213,10 +213,10 @@ class ProductStatusAnalysisTest(ApiTestCase):
         pid = self.new_product("Notion")["id"]
         r = self.client.patch(
             f"/api/products/{pid}",
-            json={"status": "已上线", "tech_analysis": "Next.js"},
+            json={"status": "成长期", "tech_analysis": "Next.js"},
         )
         self.assertEqual(r.status_code, 200, r.text)
-        self.assertEqual(r.json()["status"], "已上线")
+        self.assertEqual(r.json()["status"], "成长期")
         self.assertEqual(r.json()["tech_analysis"], "Next.js")
 
         # 清空:status 用 null,tech_analysis 空串归一为 null
@@ -238,6 +238,6 @@ class ProductStatusAnalysisTest(ApiTestCase):
         self.assertEqual(r.status_code, 422)
 
     def test_list_returns_status(self):
-        self.new_product("Notion", status="快速增长")
+        self.new_product("Notion", status="成熟期")
         rows = self.client.get("/api/products").json()
-        self.assertEqual(rows[0]["status"], "快速增长")
+        self.assertEqual(rows[0]["status"], "成熟期")

@@ -13,10 +13,15 @@ from sqlalchemy.orm import Session, sessionmaker
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
 
-DATABASE_URL = os.getenv(
+# Railway 等平台注入的 DATABASE_URL 形如 postgresql://user:pass@host:port/db(不带驱动后缀);
+# 本地 .env 用 postgresql+psycopg://。这里把"裸 postgresql://"补成 psycopg3 驱动,两种环境都能连。
+_raw_url = os.getenv(
     "DATABASE_URL",
     "postgresql+psycopg://postgres:postgres@localhost:5432/producthub",
 )
+if _raw_url.startswith("postgresql://"):
+    _raw_url = "postgresql+psycopg://" + _raw_url[len("postgresql://"):]
+DATABASE_URL = _raw_url
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 

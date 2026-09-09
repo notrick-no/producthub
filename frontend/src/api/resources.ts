@@ -39,14 +39,6 @@ export function uploadProductImage(productId: number, file: File): Promise<Produ
   return postForm<ProductImage>(`/products/${productId}/images`, form)
 }
 
-export function updateProductImage(
-  productId: number,
-  imageId: number,
-  payload: { caption?: string | null; sort_order?: number },
-): Promise<ProductImage> {
-  return patch<ProductImage>(`/products/${productId}/images/${imageId}`, payload)
-}
-
 export function deleteProductImage(productId: number, imageId: number): Promise<void> {
   return del(`/products/${productId}/images/${imageId}`)
 }

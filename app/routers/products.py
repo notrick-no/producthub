@@ -24,14 +24,10 @@ from ..models import (
     Product,
     ProductCategory,
     ProductImage,
-    ProductMilestone,
     ProductPriceTier,
 )
 from ..schemas import (
     CategoryRead,
-    ImageUpdate,
-    MilestoneInput,
-    MilestoneRead,
     PriceTierInput,
     PriceTierRead,
     ProductCreate,
@@ -58,13 +54,12 @@ _SCALAR_FIELDS = [
 
 
 def _load_product(db: Session, product_id: int) -> Product | None:
-    """带分类/发展历程关联一次性取出单个产品,避免懒加载。"""
+    """带分类/定价/图片关联一次性取出单个产品,避免懒加载。"""
     return db.scalars(
         select(Product)
         .where(Product.id == product_id)
         .options(
             selectinload(Product.category_links).selectinload(ProductCategory.category),
-            selectinload(Product.milestones),
             selectinload(Product.price_tiers),
             selectinload(Product.images),
         )
@@ -72,11 +67,10 @@ def _load_product(db: Session, product_id: int) -> Product | None:
 
 
 def _to_read(product: Product) -> ProductRead:
-    """把 ORM 对象组装成响应 Schema(分类按 category_id、节点按时间稳定排序)。"""
+    """把 ORM 对象组装成响应 Schema(分类按 category_id、图片按 id 稳定排序)。"""
     links = sorted(product.category_links, key=lambda link: link.category_id)
-    milestones = sorted(product.milestones, key=lambda m: (m.date, m.id))
     tiers = sorted(product.price_tiers, key=lambda t: t.id)  # 保持录入顺序
-    images = sorted(product.images, key=lambda i: (i.sort_order, i.id))
+    images = sorted(product.images, key=lambda i: i.id)  # 图片展示顺序 = 录入顺序
     return ProductRead(
         id=product.id,
         name=product.name,
@@ -91,7 +85,6 @@ def _to_read(product: Product) -> ProductRead:
         created_at=product.created_at,
         updated_at=product.updated_at,
         categories=[CategoryRead.model_validate(link.category) for link in links],
-        milestones=[MilestoneRead.model_validate(m) for m in milestones],
         price_tiers=[PriceTierRead.model_validate(t) for t in tiers],
         images=[ProductImageRead.model_validate(i) for i in images],
     )
@@ -124,25 +117,11 @@ def list_products(
     products = db.scalars(
         stmt.options(
             selectinload(Product.category_links).selectinload(ProductCategory.category),
-            selectinload(Product.milestones),
             selectinload(Product.price_tiers),
             selectinload(Product.images),
         )
     ).all()
     return [_to_read(p) for p in products]
-
-
-def _add_milestones(db: Session, product_id: int, milestones: list[MilestoneInput]) -> None:
-    """把一批输入节点落库(用于新建)。"""
-    for m in milestones:
-        db.add(
-            ProductMilestone(
-                product_id=product_id,
-                date=m.date,
-                title=m.title,
-                note=m.note,
-            )
-        )
 
 
 def _add_price_tiers(db: Session, product_id: int, tiers: list[PriceTierInput]) -> None:
@@ -169,7 +148,6 @@ def create_product(body: ProductCreate, db: Session = Depends(get_db)):
 
     for category_id in category_ids:
         db.add(ProductCategory(product_id=product.id, category_id=category_id))
-    _add_milestones(db, product.id, body.milestones)
     _add_price_tiers(db, product.id, body.price_tiers)
 
     db.commit()
@@ -203,20 +181,6 @@ def update_product(
         for category_id in category_ids:
             product.category_links.append(
                 ProductCategory(product_id=product.id, category_id=category_id)
-            )
-
-    # 发展历程:缺席 = 不动;[] / null = 清空;数组 = 整组替换(与分类一致)
-    if "milestones" in payload:
-        product.milestones.clear()
-        db.flush()
-        for m in payload["milestones"] or []:
-            product.milestones.append(
-                ProductMilestone(
-                    product_id=product.id,
-                    date=m["date"],
-                    title=m["title"],
-                    note=m.get("note"),
-                )
             )
 
     # 分级定价:同款三态(缺席 = 不动;[] = 清空;数组 = 整组替换)
@@ -303,21 +267,12 @@ def upload_image(
     name = uuid4().hex + ext
     (UPLOAD_DIR / name).write_bytes(data)
 
-    # 排到该产品当前最后一位
-    last = db.scalars(
-        select(ProductImage.sort_order)
-        .where(ProductImage.product_id == product_id)
-        .order_by(ProductImage.sort_order.desc(), ProductImage.id.desc())
-        .limit(1)
-    ).first()
     image = ProductImage(
         product_id=product_id,
         path=f"/uploads/{name}",
         filename=_original_filename(file.filename),
         content_type=file.content_type,
         size=len(data),
-        caption=None,
-        sort_order=(last + 1) if last is not None else 0,
     )
     db.add(image)
     try:
@@ -325,25 +280,6 @@ def upload_image(
     except Exception:
         (UPLOAD_DIR / name).unlink(missing_ok=True)  # 入库失败则回收文件
         raise
-    db.refresh(image)
-    return image
-
-
-@router.patch(
-    "/products/{product_id}/images/{image_id}", response_model=ProductImageRead
-)
-def update_image(
-    product_id: int,
-    image_id: int,
-    body: ImageUpdate,
-    db: Session = Depends(get_db),
-):
-    """改一张图片的说明 / 排序;缺席字段不动。"""
-    image = _get_image(db, product_id, image_id)
-    for field in ("caption", "sort_order"):
-        if field in body.model_dump(exclude_unset=True):
-            setattr(image, field, getattr(body, field))
-    db.commit()
     db.refresh(image)
     return image
 

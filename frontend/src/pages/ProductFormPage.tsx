@@ -14,13 +14,19 @@ import {
   Typography,
 } from 'antd'
 import { PlusOutlined } from '@ant-design/icons'
-import { createCategory, createProduct, getProduct, listCategories, updateProduct } from '../api/resources'
+import {
+  createCategory,
+  createProduct,
+  getProduct,
+  listCategories,
+  updateProduct,
+  uploadProductImage,
+} from '../api/resources'
 import type { Category, ProductPayload, ProductStatus } from '../types'
 import { PRODUCT_STATUSES } from '../types'
-import MilestoneEditor, { collectMilestones, milestoneToDraft } from '../components/MilestoneEditor'
-import type { MilestoneDraft } from '../components/MilestoneEditor'
 import PriceTierEditor, { collectPriceTiers, priceTierToDraft } from '../components/PriceTierEditor'
 import type { PriceTierDraft } from '../components/PriceTierEditor'
+import ProductImagesPicker from '../components/ProductImagesPicker'
 
 const { TextArea } = Input
 
@@ -65,8 +71,9 @@ export default function ProductFormPage() {
   const [categories, setCategories] = useState<Category[]>([])
   const [loadingProduct, setLoadingProduct] = useState(isEdit)
   const [saving, setSaving] = useState(false)
-  const [milestones, setMilestones] = useState<MilestoneDraft[]>([])
   const [priceTiers, setPriceTiers] = useState<PriceTierDraft[]>([])
+  // 新建时暂存的待上传图片(保存后随记录一并上传)
+  const [pendingImages, setPendingImages] = useState<File[]>([])
 
   // 下拉里"直接新建分类"用的输入框
   const [newCatName, setNewCatName] = useState('')
@@ -94,7 +101,6 @@ export default function ProductFormPage() {
           tech_analysis: p.tech_analysis ?? '',
           category_ids: p.categories.map((c) => c.id),
         })
-        setMilestones(p.milestones.map(milestoneToDraft))
         setPriceTiers(p.price_tiers.map(priceTierToDraft))
       })
       .catch((err) => {
@@ -127,20 +133,31 @@ export default function ProductFormPage() {
       return // 校验失败,antd 已标红
     }
 
-    const collected = collectMilestones(milestones)
-    if (collected.error) {
-      message.error('发展历程里有没填完的行:请补全「时间 + 事件名」,或删除该行')
-      return
-    }
-
     setSaving(true)
     const payload = toPayload(values)
-    payload.milestones = collected.milestones ?? []
     payload.price_tiers = collectPriceTiers(priceTiers).price_tiers ?? []
     try {
       const saved = isEdit ? await updateProduct(Number(id), payload) : await createProduct(payload)
       message.success(isEdit ? '已保存修改' : `已创建「${saved.name}」`)
-      navigate('/', { replace: true }) // 详情页做好后改为跳详情
+      if (isEdit) {
+        navigate(`/products/${Number(id)}`)
+        return
+      }
+      // 新建:把暂存的图片逐张传上去,再去详情页(补图/删除都在详情页)
+      const failed: string[] = []
+      for (const f of pendingImages) {
+        try {
+          await uploadProductImage(saved.id, f)
+        } catch {
+          failed.push(f.name)
+        }
+      }
+      if (failed.length > 0) {
+        message.warning(
+          `${failed.length} 张图片上传失败: ${failed.join('、')}。产品已创建,可到详情页补传。`,
+        )
+      }
+      navigate(`/products/${saved.id}`)
     } catch (err) {
       message.error(err instanceof Error ? err.message : '保存失败')
     } finally {
@@ -220,13 +237,16 @@ export default function ProductFormPage() {
           <TextArea rows={4} placeholder="技术栈、架构、关键实现方式等" />
         </Form.Item>
 
-        <Divider />
-
-        <Typography.Title level={5}>发展历程</Typography.Title>
-        <Typography.Paragraph type="secondary" style={{ marginTop: -4 }}>
-          产品关键时间点,按时间先后展示。例如:产品成立 / 上线 MVP / 开始收费。
-        </Typography.Paragraph>
-        <MilestoneEditor drafts={milestones} onChange={setMilestones} />
+        {!isEdit && (
+          <>
+            <Divider />
+            <Typography.Title level={5}>产品素材(选填)</Typography.Title>
+            <Typography.Paragraph type="secondary" style={{ marginTop: -4 }}>
+              先选好截图,保存记录时会随之一并上传;之后也可在详情页补加或删除。
+            </Typography.Paragraph>
+            <ProductImagesPicker onChange={setPendingImages} />
+          </>
+        )}
 
         <Divider />
 

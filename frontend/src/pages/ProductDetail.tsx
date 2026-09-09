@@ -8,7 +8,6 @@ import {
   Space,
   Spin,
   Tag,
-  Timeline,
   Typography,
 } from 'antd'
 import { ArrowLeftOutlined, DeleteOutlined, EditOutlined, GlobalOutlined } from '@ant-design/icons'
@@ -21,12 +20,6 @@ const nf = new Intl.NumberFormat('zh-CN')
 
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleString('zh-CN', { dateStyle: 'medium', timeStyle: 'short' })
-}
-
-/** '2024-03-01' → '2024.03';非 1 号则带上日:'2024-03-15' → '2024.03.15' */
-function formatMonthDay(iso: string): string {
-  const [y, m, d] = iso.split('-')
-  return d === '01' ? `${y}.${m}` : `${y}.${m}.${d}`
 }
 
 /** 一档价格显示成「金额/周期」;空金额 = 面议;0 = 免费。 */
@@ -177,30 +170,6 @@ export default function ProductDetail() {
           onReload={refresh}
         />
       </Card>
-
-      {product.milestones.length > 0 && (
-        <Card title="产品发展历程">
-          <Timeline
-            items={product.milestones.map((m) => ({
-              label: (
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  {formatMonthDay(m.date)}
-                </Typography.Text>
-              ),
-              children: (
-                <div>
-                  <Typography.Text strong>{m.title}</Typography.Text>
-                  {m.note && (
-                    <div>
-                      <Typography.Text type="secondary">{m.note}</Typography.Text>
-                    </div>
-                  )}
-                </div>
-              ),
-            }))}
-          />
-        </Card>
-      )}
 
       {product.price_tiers.length > 0 && (
         <Card title="分级定价">
