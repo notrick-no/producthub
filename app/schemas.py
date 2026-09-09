@@ -157,3 +157,125 @@ class ProductRead(ProductBase):
     categories: list[CategoryRead] = Field(default_factory=list)
     price_tiers: list[PriceTierRead] = Field(default_factory=list)
     images: list[ProductImageRead] = Field(default_factory=list)
+
+
+# ---------- 账号 / 鉴权(第三版)----------
+# 邮箱登录 + 管理员账号管理。账号字段 snake_case 对齐 models.User;
+# 返回给前端的 UserRead 绝不带 password_hash / 各类 token 字段。
+
+USER_ROLES = ("admin", "employee")
+UserRole = Literal["admin", "employee"]
+
+PASSWORD_MIN = 8
+PASSWORD_MAX = 72  # bcrypt 只哈希前 72 字节,超出会静默截断
+
+
+def _is_email(v: str) -> bool:
+    """轻量邮箱校验(内部工具,不引 email-validator):本地@域名 且域名含点、无空白。"""
+    if not v or any(ch.isspace() for ch in v):
+        return False
+    local, sep, domain = v.partition("@")
+    return bool(sep and local and domain and "." in domain)
+
+
+class LoginRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    email: str
+    password: str
+
+
+class ChangePasswordRequest(BaseModel):
+    """登录后改自己密码(old = 当前/临时密码)。"""
+
+    old_password: str
+    new_password: str = Field(min_length=PASSWORD_MIN, max_length=PASSWORD_MAX)
+
+
+class SetPasswordRequest(BaseModel):
+    """邀请链接设初始密码(公开,token 一次性)。"""
+
+    token: str
+    new_password: str = Field(min_length=PASSWORD_MIN, max_length=PASSWORD_MAX)
+
+
+class UserRead(BaseModel):
+    """返回给前端的账号(不含哈希与 token 字段)。"""
+
+    id: int
+    email: str
+    name: str
+    department: str | None
+    role: UserRole
+    is_active: bool
+    must_change_password: bool
+    password_set: bool  # 是否已设过密码(派生:哈希非空)
+    created_at: datetime
+    updated_at: datetime
+
+
+def user_read_from_model(user) -> UserRead:
+    """ORM User → UserRead(补派生字段 password_set)。"""
+    return UserRead(
+        id=user.id,
+        email=user.email,
+        name=user.name,
+        department=user.department,
+        role=user.role,
+        is_active=user.is_active,
+        must_change_password=user.must_change_password,
+        password_set=bool(user.password_hash),
+        created_at=user.created_at,
+        updated_at=user.updated_at,
+    )
+
+
+class UserCreate(BaseModel):
+    """管理员创建员工账号(POST /api/users)。邮箱即唯一登录 ID。"""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    name: str = Field(min_length=1, max_length=255)
+    email: str = Field(max_length=255)
+    department: str | None = Field(default=None, max_length=100)
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def _normalize_email(cls, v):
+        if isinstance(v, str):
+            v = v.strip().lower()
+        return v
+
+    @field_validator("email")
+    @classmethod
+    def _email_must_be_valid(cls, v):
+        if not _is_email(v):
+            raise ValueError("请输入有效邮箱")
+        return v
+
+    @field_validator("department", mode="before")
+    @classmethod
+    def _blank_department_to_none(cls, v):
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
+
+
+class UserUpdate(BaseModel):
+    """PATCH /api/users/{id}。缺席 = 不改;本期支持 name / department / is_active。
+
+    邮箱与 role 不可改(邮箱是唯一 ID;role 本期不支持在界面升降级)。
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    department: str | None = Field(default=None, max_length=100)
+    is_active: bool | None = None
+
+    @field_validator("department", mode="before")
+    @classmethod
+    def _blank_department_to_none(cls, v):
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v

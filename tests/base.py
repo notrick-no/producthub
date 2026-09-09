@@ -16,6 +16,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import bcrypt
+
 # 让项目根目录可被 import(任何 cwd 下都能跑)
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
@@ -64,6 +66,21 @@ def _ensure_test_db_exists() -> None:
 
 _ensure_test_db_exists()
 
+# 默认管理员:每个用例 setUp 都会建一个并让 self.client 真实登录,
+# 这样第三版加登录门禁后,既有 65 条直打 /api 的用例不用逐个改。
+# 低轮数哈希只为测试提速(rounds=4,bcrypt 允许的最小轮数)。
+_ADMIN_EMAIL = "admin@test.local"
+_ADMIN_PASSWORD = "AdminTest2026"
+
+
+def _fast_hash(password: str) -> str:
+    return bcrypt.hashpw(
+        password.encode("utf-8"), bcrypt.gensalt(rounds=4)
+    ).decode("utf-8")
+
+
+_ADMIN_HASH = _fast_hash(_ADMIN_PASSWORD)
+
 
 class ApiTestCase(unittest.TestCase):
     """每个测试类重建一次表结构,每个用例前清空数据。"""
@@ -76,6 +93,7 @@ class ApiTestCase(unittest.TestCase):
     def setUp(self) -> None:
         self.client = TestClient(app)
         self._truncate_all()
+        self._seed_default_admin()
 
     # ---------- 数据清理 ----------
     def _truncate_all(self) -> None:
@@ -84,11 +102,61 @@ class ApiTestCase(unittest.TestCase):
             db.execute(
                 text(
                     "TRUNCATE product_categories, product_price_tiers, "
-                    "product_images, products, categories "
+                    "product_images, products, categories, users, sessions "
                     "RESTART IDENTITY CASCADE"
                 )
             )
             db.commit()
+
+    # ---------- 鉴权(第三版)----------
+    def _seed_default_admin(self) -> None:
+        """库中直插一个默认管理员并让 self.client 登录(拿真实会话 cookie)。"""
+        self._add_user(
+            email=_ADMIN_EMAIL,
+            name="测试管理员",
+            role="admin",
+            password_hash=_ADMIN_HASH,
+        )
+        r = self.client.post(
+            "/api/auth/login",
+            json={"email": _ADMIN_EMAIL, "password": _ADMIN_PASSWORD},
+        )
+        self.assertEqual(r.status_code, 200, r.text)
+
+    def _add_user(
+        self,
+        email: str,
+        name: str = "测试员工",
+        role: str = "employee",
+        password: str | None = None,
+        password_hash: str | None = None,
+        is_active: bool = True,
+        must_change_password: bool = False,
+        department: str | None = None,
+    ) -> int:
+        """DB 直插一个账号,返回其 id(不走接口,方便造场景)。"""
+        with SessionLocal() as db:
+            user = models.User(
+                email=email.strip().lower(),
+                name=name,
+                role=role,
+                department=department,
+                is_active=is_active,
+                must_change_password=must_change_password,
+                password_hash=password_hash or (
+                    _fast_hash(password) if password else None
+                ),
+            )
+            db.add(user)
+            db.commit()
+            return user.id
+
+    def login_client(self, email: str, password: str) -> TestClient:
+        """另起一个已登录的客户端(扮演普通员工/第二个管理员)。"""
+        client = TestClient(app)
+        r = client.post("/api/auth/login", json={"email": email, "password": password})
+        self.assertEqual(r.status_code, 200, r.text)
+        return client
 
     # ---------- 常用造数据助手 ----------
     def new_category(self, name: str = "默认分类", description: str | None = None) -> dict:

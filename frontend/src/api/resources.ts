@@ -4,10 +4,53 @@ import { del, get, patch, post, postForm } from './client'
 import type {
   Category,
   CategoryPayload,
+  LoginPayload,
   Product,
   ProductImage,
   ProductPayload,
+  User,
+  UserPatchPayload,
+  UserPayload,
 } from '../types'
+
+// ---------- Auth(登录 / 登出 / 改密,HttpOnly cookie 会话) ----------
+export function login(payload: LoginPayload): Promise<User> {
+  return post<User>('/auth/login', payload)
+}
+
+export function logout(): Promise<void> {
+  return post<void>('/auth/logout', {})
+}
+
+export function fetchMe(): Promise<User> {
+  return get<User>('/auth/me')
+}
+
+export function changePassword(old_password: string, new_password: string): Promise<void> {
+  return post<void>('/auth/password', { old_password, new_password })
+}
+
+/** 邀请链接设初始密码:后端设完即登录,返回当前用户。 */
+export function setPassword(token: string, new_password: string): Promise<User> {
+  return post<User>('/auth/set-password', { token, new_password })
+}
+
+// ---------- Users(管理员账号管理) ----------
+export function listUsers(): Promise<User[]> {
+  return get<User[]>('/users')
+}
+
+export function createUser(payload: UserPayload): Promise<User> {
+  return post<User>('/users', payload)
+}
+
+export function updateUser(id: number, payload: UserPatchPayload): Promise<User> {
+  return patch<User>(`/users/${id}`, payload)
+}
+
+export function resetUserPassword(id: number): Promise<{ ok: boolean; email: string }> {
+  return post<{ ok: boolean; email: string }>(`/users/${id}/reset-password`, {})
+}
 
 // ---------- Products ----------
 export function listProducts(categoryId?: number): Promise<Product[]> {

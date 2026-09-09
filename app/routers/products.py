@@ -19,6 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from ..db import get_db
+from ..deps import get_current_user
 from ..models import (
     Category,
     Product,
@@ -37,7 +38,10 @@ from ..schemas import (
 )
 from ..storage import MAX_IMAGE_SIZE, UPLOAD_DIR, image_ext
 
-router = APIRouter(prefix="/api", tags=["products"])
+# 整个资源需要登录(第三版);业务访问还受 must_change_password 硬门禁约束
+router = APIRouter(
+    prefix="/api", tags=["products"], dependencies=[Depends(get_current_user)]
+)
 
 # Product 上可由 API 直接写入的标量字段(与 产品.md 一致)
 _SCALAR_FIELDS = [

@@ -1,4 +1,4 @@
-"""Producthut 数据模型(SQLAlchemy 2.0 声明式)。
+"""producthub 数据模型(SQLAlchemy 2.0 声明式)。
 
 对应 产品.md 的数据库设计三张表:
   products            产品记录
@@ -13,7 +13,7 @@
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import DateTime, ForeignKey, Integer, Numeric, String, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text, func, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -146,3 +146,69 @@ class ProductImage(Base):
     )
 
     product: Mapped[Product] = relationship(back_populates="images")
+
+
+class User(Base):
+    """组织账号(管理员 / 员工)。
+
+    登录走邮箱 + 密码;员工账号由管理员创建、收到邀请邮件后自设密码。
+    `password_hash` 为空 = 尚未设过密码(邀请待完成);
+    `must_change_password` = 下次登录必须先改密(重置密码后强制);
+    `is_active` False = 离职冻结,登录与既有会话都被拒绝。
+    邮箱一律存小写(唯一标识);role 取值见 schemas.USER_ROLES。
+    """
+
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    email: Mapped[str] = mapped_column(String(255), unique=True)  # 登录邮箱(小写)
+    name: Mapped[str] = mapped_column(String(255))  # 员工姓名
+    department: Mapped[str | None] = mapped_column(String(100))  # 初始部门(可空)
+    role: Mapped[str] = mapped_column(
+        String(20), server_default=text("'employee'")
+    )  # admin / employee
+    password_hash: Mapped[str | None] = mapped_column(String(255))  # bcrypt 哈希
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("true")
+    )
+    must_change_password: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    invite_token_hash: Mapped[str | None] = mapped_column(
+        String(64), unique=True
+    )  # sha256(邀请 token),一次性,设完密码即清
+    invite_token_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    sessions: Mapped[list["Session"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+
+
+class Session(Base):
+    """一次登录会话:随机 token 的 sha256 存这里,明文只放 HttpOnly cookie。
+
+    显式记录以便「禁用员工 / 重置密码」时一键踢掉该用户全部会话;
+    过期或删除后需重新登录。token 本身用 secrets 生成,库里只存哈希。
+    """
+
+    __tablename__ = "sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)  # sha256(token)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    user: Mapped[User] = relationship(back_populates="sessions")

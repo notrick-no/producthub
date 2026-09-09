@@ -1,4 +1,4 @@
-# Producthut 生产镜像(Railway 等平台用根目录 Dockerfile 云端构建)
+# producthub 生产镜像(Railway 等平台用根目录 Dockerfile 云端构建)
 #
 # 阶段 1(node):构建前端 dist
 # 阶段 2(python):装依赖 + 拷贝代码/迁移 + 前端产物;入口先迁移再起 uvicorn

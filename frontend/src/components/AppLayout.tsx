@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
-import { Outlet, useNavigate, useSearchParams } from 'react-router-dom'
+import { Outlet, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   App as AntApp,
+  Avatar,
   Button,
+  Dropdown,
   Input,
   Layout,
   Menu,
@@ -10,30 +12,43 @@ import {
   Space,
   Typography,
 } from 'antd'
+import type { MenuProps } from 'antd'
 import {
   AppstoreOutlined,
   FolderAddOutlined,
   FolderOutlined,
+  KeyOutlined,
+  LogoutOutlined,
   PlusOutlined,
   SettingOutlined,
+  TeamOutlined,
 } from '@ant-design/icons'
 import { createCategory, listCategories } from '../api/resources'
 import type { Category } from '../types'
+import { useAuth } from '../auth/AuthContext'
 import CategoryManageModal from './CategoryManageModal'
 
-const { Sider, Content } = Layout
+const { Sider, Header, Content } = Layout
 
-/** 应用外壳:顶栏(搜索/新建)+ 左侧分类栏 + 内容区。 */
+/** 品牌强调色(与邀请邮件里的按钮一致) */
+const BRAND = '#7e14ff'
+
+/** 应用外壳:左侧分类栏 + 顶栏(搜索/新建 + 头像菜单)+ 内容区。 */
 export default function AppLayout() {
   const navigate = useNavigate()
+  const location = useLocation()
   const [params, setParams] = useSearchParams()
   const { message } = AntApp.useApp()
+  const { user, logout } = useAuth()
 
   const [categories, setCategories] = useState<Category[]>([])
   const [catOpen, setCatOpen] = useState(false)
   const [manageOpen, setManageOpen] = useState(false)
   const [newCatName, setNewCatName] = useState('')
   const [creating, setCreating] = useState(false)
+
+  // 账号管理页没有「搜索 / 新建记录」这类产品动作
+  const isAccounts = location.pathname === '/users'
 
   // 当前分类筛选:URL ?cat=<id|all>
   const activeCat = params.get('cat') ?? 'all'
@@ -54,8 +69,8 @@ export default function AppLayout() {
   }
 
   useEffect(() => {
-    loadCategories()
-  }, [])
+    if (!isAccounts) loadCategories()
+  }, [isAccounts])
 
   const updateParam = (key: string, value: string | null) => {
     const next = new URLSearchParams(params)
@@ -95,12 +110,32 @@ export default function AppLayout() {
     })),
   ]
 
+  const userMenuItems: MenuProps['items'] = [
+    ...(user?.role === 'admin'
+      ? [{ key: 'accounts', icon: <TeamOutlined />, label: '账号管理' }]
+      : []),
+    { key: 'password', icon: <KeyOutlined />, label: '修改密码' },
+    { type: 'divider' as const },
+    { key: 'logout', icon: <LogoutOutlined />, label: '退出登录', danger: true },
+  ]
+
+  const handleUserMenu: MenuProps['onClick'] = async ({ key }) => {
+    if (key === 'accounts') {
+      navigate('/users')
+    } else if (key === 'password') {
+      navigate('/change-password')
+    } else if (key === 'logout') {
+      await logout()
+      navigate('/login', { replace: true })
+    }
+  }
+
   return (
     <Layout style={{ minHeight: '100vh' }}>
       <Sider theme="light" width={220} style={{ borderRight: '1px solid #f0f0f0' }}>
         <div style={{ padding: '16px 20px 8px' }}>
           <Typography.Title level={4} style={{ margin: 0 }}>
-            Producthut
+            producthub
           </Typography.Title>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
             产品研究整理
@@ -141,25 +176,58 @@ export default function AppLayout() {
       </Sider>
 
       <Layout>
-        <Content style={{ padding: 24, maxWidth: 1100 }}>
-          {/* 顶栏动作:搜索 + 新建记录 */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
-            <Input.Search
-              allowClear
-              placeholder="搜索产品名 / 网址"
-              style={{ maxWidth: 320 }}
-              defaultValue={q}
-              onSearch={(v) => updateParam('q', v.trim() || null)}
-            />
-            <Button
-              type="primary"
-              icon={<PlusOutlined />}
-              onClick={() => navigate('/products/new')}
-            >
-              新建记录
-            </Button>
+        <Header
+          style={{
+            background: '#fff',
+            borderBottom: '1px solid #f0f0f0',
+            padding: '0 24px',
+            height: 56,
+            lineHeight: '56px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 12,
+          }}
+        >
+          <div style={{ flex: 1, minWidth: 0 }}>
+            {!isAccounts && (
+              <Input.Search
+                allowClear
+                placeholder="搜索产品名 / 网址"
+                style={{ maxWidth: 320 }}
+                defaultValue={q}
+                onSearch={(v) => updateParam('q', v.trim() || null)}
+              />
+            )}
           </div>
+          <Space size={12}>
+            {!isAccounts && (
+              <Button
+                type="primary"
+                icon={<PlusOutlined />}
+                onClick={() => navigate('/products/new')}
+              >
+                新建记录
+              </Button>
+            )}
+            <Dropdown
+              menu={{ items: userMenuItems, onClick: handleUserMenu }}
+              placement="bottomRight"
+            >
+              <Space style={{ cursor: 'pointer' }}>
+                <Avatar
+                  size="small"
+                  style={{ background: BRAND, verticalAlign: 'middle' }}
+                >
+                  {user?.name?.charAt(0) ?? '?'}
+                </Avatar>
+                <Typography.Text>{user?.name}</Typography.Text>
+              </Space>
+            </Dropdown>
+          </Space>
+        </Header>
 
+        <Content style={{ padding: 24, maxWidth: 1100 }}>
           <Outlet context={{ categories, reloadCategories: loadCategories }} />
         </Content>
       </Layout>

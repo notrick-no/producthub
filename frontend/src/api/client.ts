@@ -10,6 +10,16 @@ type RequestInitLike = Omit<RequestInit, 'headers'> & {
   headers?: Record<string, string>
 }
 
+/**
+ * 登录态失效(401)回调。由 AuthProvider 在挂载时注册:
+ * 非登录页收到 401(会话过期 / 被踢下线)就清掉本地用户,门禁自动跳登录页。
+ * 登录页本身(login/set-password)也常返回 401,那时只是表单报错,不触发跳转。
+ */
+let unauthorizedHandler: (() => void) | null = null
+export function setUnauthorizedHandler(fn: (() => void) | null) {
+  unauthorizedHandler = fn
+}
+
 export async function api<T>(path: string, init: RequestInitLike = {}): Promise<T> {
   const { headers, body, ...rest } = init
   // FormData(multipart 上传)由 fetch 自动带 boundary,不能手动设 Content-Type
@@ -24,6 +34,9 @@ export async function api<T>(path: string, init: RequestInitLike = {}): Promise<
   })
 
   if (!res.ok) {
+    if (res.status === 401 && unauthorizedHandler) {
+      unauthorizedHandler() // 通知登录态已失效(是否跳转由回调自己判断当前页面)
+    }
     let detail = `请求失败(${res.status})`
     try {
       const data = await res.json()
