@@ -142,7 +142,7 @@ def send_user_invite(email: str, name: str, raw_token: str) -> None:
           <p>{_display(name)} 你好,</p>
           <p>管理员在 producthub 为你创建了账号(<strong>{html.escape(email)}</strong>)。</p>
           <p>请点击下面的链接设置你的登录密码(72 小时内有效、仅可使用一次):</p>
-          <p><a href="{html.escape(link, quote=True)}" style="color:#7e14ff">设置密码</a></p>
+          <p><a href="{html.escape(link, quote=True)}" style="color:#2464e4">设置密码</a></p>
           <p style="color:#888;font-size:12px">链接打不开可复制:{html.escape(link, quote=True)}</p>
         </div>
         """,
