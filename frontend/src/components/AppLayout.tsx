@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Outlet, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
+import { Link, Outlet, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   App as AntApp,
   Avatar,
@@ -26,12 +26,13 @@ import {
 import { createCategory, listCategories } from '../api/resources'
 import type { Category } from '../types'
 import { useAuth } from '../auth/AuthContext'
+import BrandLogo from './BrandLogo'
 import CategoryManageModal from './CategoryManageModal'
 
 const { Sider, Header, Content } = Layout
 
-/** 品牌强调色(与邀请邮件里的按钮一致) */
-const BRAND = '#7e14ff'
+/** 品牌强调色(取自 Logo 主色,与邀请邮件里的链接色一致) */
+const BRAND = '#2464e4'
 
 /** 应用外壳:左侧分类栏 + 顶栏(搜索/新建 + 头像菜单)+ 内容区。 */
 export default function AppLayout() {
@@ -189,7 +190,11 @@ export default function AppLayout() {
             gap: 12,
           }}
         >
-          <div style={{ flex: 1, minWidth: 0 }}>
+          {/* 顶部导航左侧:Logo(右侧是头像菜单) */}
+          <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 12 }}>
+            <Link to="/" aria-label="返回首页" style={{ display: 'flex', flex: 'none' }}>
+              <BrandLogo size={26} />
+            </Link>
             {!isAccounts && (
               <Input.Search
                 allowClear

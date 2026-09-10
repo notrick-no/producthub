@@ -13,3 +13,148 @@ body {
     -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC',
     'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
 }
+
+/* ---------- 第三版:品牌视觉(登录页潮汐画 / 首页理念条) ----------
+   图片资产放 frontend/public/brand/(logo.png、tide-back/mid/front.png)。
+   组件在资产缺失时走中性灰占位,所以下面这些规则不依赖资产存在。 */
+
+/* ----- 登录页两栏:左潮汐画 + 右表单 ----- */
+.login-shell {
+  display: flex;
+  min-height: 100vh;
+  min-height: 100dvh; /* 移动端浏览器工具栏高度 */
+  background: #fff;
+}
+
+.login-art {
+  position: relative;
+  flex: 1 1 56%;
+  overflow: hidden;
+  /* 天空底:潮汐画的透明上半部会透出这层 */
+  background: linear-gradient(180deg, #fbfcfe 0%, #eef2f7 100%);
+}
+
+.login-art__caption {
+  position: absolute;
+  top: 48px;
+  left: 48px;
+  right: 48px;
+  z-index: 2;
+  padding: 16px 20px;
+  border-radius: 12px;
+  /* 半透明白底衬:无论潮汐画深浅,文案都可读 */
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(6px);
+}
+
+.login-panel {
+  flex: 1 1 44%;
+  min-width: 380px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 24px;
+  background: #fff;
+}
+
+.login-panel__inner {
+  width: 100%;
+  max-width: 360px;
+}
+
+/* ----- 潮汐画:每层三份图(原图/镜像/原图),平移两份(-200%/3)即循环一轮 ----- */
+.tide-art {
+  position: absolute;
+  inset: 0;
+}
+
+.tide-layer {
+  position: absolute;
+  left: 0;
+  bottom: var(--tide-offset, 0); /* 单层上下微调:如 6%、-4% */
+  width: calc(300% * var(--tide-scale, 1)); /* 三份图;调 --tide-scale 可整体放大 */
+  /* 高度只留波浪所在的那一条,不留 2/3 的透明区(那部分纯占显存、拖慢栅格)。
+     画幅是 3:1(2172×724),层宽 = 3 屏 ⇒ 波浪高 = 一屏宽/3 = 层宽/9。
+     换成分辨率不同但仍是 3:1 的图不用改;换成别的比例要同步改这里。 */
+  aspect-ratio: 9 / 1;
+  height: auto;
+  display: flex;
+  will-change: transform;
+  animation: tide-drift linear infinite;
+}
+
+/* 三份图各占容器 1/3 = 各占一屏宽;contain + 贴底 = 按宽度缩放并沉在底部 */
+.tide-layer > img {
+  flex: 0 0 calc(100% / 3);
+  height: 100%;
+  display: block;
+  object-fit: contain;
+  object-position: bottom;
+}
+
+/* 第 2 份水平镜像:素材本身左右接不上,镜像后接缝两侧像素一致,循环不跳 */
+.tide-layer > :nth-child(even) {
+  transform: scaleX(-1);
+}
+
+/* 占位波浪(资产缺失时):同样摆三份,贴底 */
+.tide-layer > svg {
+  flex: 0 0 calc(100% / 3);
+  height: 100%;
+  align-self: flex-end;
+  display: block;
+}
+
+/* 由远及近:越远的越慢(视差)。
+   一轮位移 = 两份 = 2 屏宽,所以时长是「每屏 10/7/4 秒」的 2 倍;
+   想让潮汐更快就调小这三个值(数值越小越快)。 */
+.tide-layer--back {
+  animation-duration: 20s;
+}
+.tide-layer--mid {
+  animation-duration: 14s;
+}
+.tide-layer--front {
+  animation-duration: 8s;
+}
+
+/* -200%/3 = 两份图 = 2 屏宽 = 一个「原图 + 镜像」周期,故首尾画面完全一致 */
+@keyframes tide-drift {
+  from {
+    transform: translate3d(0, 0, 0);
+  }
+  to {
+    transform: translate3d(calc(-200% / 3), 0, 0);
+  }
+}
+
+/* ----- 首页理念条 ----- */
+.philosophy-hero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+  padding: 20px 24px; /* 标语是 30px 大字,留够呼吸空间 */
+  border: 1px solid #f0f0f0;
+  border-radius: 12px;
+  background: #fafafa;
+}
+
+/* 尊重系统「减弱动态效果」:停动画,画面仍完整 */
+@media (prefers-reduced-motion: reduce) {
+  .tide-layer {
+    animation: none;
+  }
+}
+
+/* 窄屏:左栏构图不可读,收起潮汐画只留表单 */
+@media (max-width: 880px) {
+  .login-art {
+    display: none;
+  }
+  .login-panel {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+}

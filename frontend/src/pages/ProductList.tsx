@@ -5,6 +5,7 @@ import type { TableColumnsType } from 'antd'
 import { listProducts } from '../api/resources'
 import type { Product } from '../types'
 import { STATUS_COLOR } from '../statusMeta'
+import PhilosophyHero from '../components/PhilosophyHero'
 
 const nf = new Intl.NumberFormat('zh-CN')
 
@@ -112,14 +113,17 @@ export default function ProductList() {
   ]
 
   return (
-    <Table<Product>
-      rowKey="id"
-      columns={columns}
-      dataSource={rows}
-      loading={loading}
-      pagination={{ pageSize: 20, showTotal: (t) => `共 ${t} 条` }}
-      locale={{ emptyText: q ? '没有匹配的产品' : '还没有产品,点右上角「新建记录」开始研究' }}
-      scroll={{ x: 720 }}
-    />
+    <>
+      <PhilosophyHero />
+      <Table<Product>
+        rowKey="id"
+        columns={columns}
+        dataSource={rows}
+        loading={loading}
+        pagination={{ pageSize: 20, showTotal: (t) => `共 ${t} 条` }}
+        locale={{ emptyText: q ? '没有匹配的产品' : '还没有产品,点右上角「新建记录」开始研究' }}
+        scroll={{ x: 720 }}
+      />
+    </>
   )
 }

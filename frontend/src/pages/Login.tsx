@@ -1,15 +1,17 @@
 import { useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { App as AntApp, Button, Card, Form, Input, Typography } from 'antd'
+import { App as AntApp, Button, Form, Input, Typography } from 'antd'
 import { LockOutlined, MailOutlined } from '@ant-design/icons'
 import { useAuth } from '../auth/AuthContext'
+import BrandLogo from '../components/BrandLogo'
+import TideArt from '../components/TideArt'
 
 interface FormValues {
   email: string
   password: string
 }
 
-/** 登录页(第三版)。成功后按返回路径跳回,或去改密页。 */
+/** 登录页(第三版)。左栏潮汐抽象画,右栏表单;成功后按返回路径跳回,或去改密页。 */
 export default function Login() {
   const { message } = AntApp.useApp()
   const navigate = useNavigate()
@@ -37,60 +39,68 @@ export default function Login() {
   }
 
   return (
-    <div
-      style={{
-        minHeight: '100vh',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        background: '#f5f5f5',
-      }}
-    >
-      <Card style={{ width: 360 }} styles={{ body: { padding: '32px 28px' } }}>
-        <div style={{ textAlign: 'center', marginBottom: 24 }}>
-          <Typography.Title level={3} style={{ margin: 0 }}>
-            producthub
+    <div className="login-shell">
+      <aside className="login-art">
+        <TideArt />
+        <div className="login-art__caption">
+          <Typography.Title level={2} style={{ margin: 0 }}>
+            潮汐往复，基石恒常
           </Typography.Title>
-          <Typography.Text type="secondary">产品研究整理 · 请登录</Typography.Text>
+          <Typography.Text type="secondary">
+            "Stand firm amid the tides, and do what you truly desire."
+          </Typography.Text>
         </div>
-        <Form<FormValues> layout="vertical" onFinish={handleFinish} requiredMark={false}>
-          <Form.Item
-            name="email"
-            rules={[
-              { required: true, message: '请输入邮箱' },
-              { type: 'email', message: '请输入有效邮箱' },
-            ]}
-          >
-            <Input
-              prefix={<MailOutlined />}
-              placeholder="登录邮箱"
-              autoComplete="username"
+      </aside>
+
+      <main className="login-panel">
+        <div className="login-panel__inner">
+          <div style={{ textAlign: 'center', marginBottom: 24 }}>
+            <BrandLogo size={44} style={{ margin: '0 auto 12px' }} />
+            <Typography.Title level={3} style={{ margin: 0 }}>
+              producthub
+            </Typography.Title>
+            <Typography.Text type="secondary">产品研究整理 · 请登录</Typography.Text>
+          </div>
+
+          <Form<FormValues> layout="vertical" onFinish={handleFinish} requiredMark={false}>
+            <Form.Item
+              name="email"
+              rules={[
+                { required: true, message: '请输入邮箱' },
+                { type: 'email', message: '请输入有效邮箱' },
+              ]}
+            >
+              <Input
+                prefix={<MailOutlined />}
+                placeholder="登录邮箱"
+                autoComplete="username"
+                size="large"
+              />
+            </Form.Item>
+            <Form.Item
+              name="password"
+              rules={[{ required: true, message: '请输入密码' }]}
+            >
+              <Input.Password
+                prefix={<LockOutlined />}
+                placeholder="密码"
+                autoComplete="current-password"
+                size="large"
+              />
+            </Form.Item>
+            <Button
+              type="primary"
+              htmlType="submit"
+              block
               size="large"
-            />
-          </Form.Item>
-          <Form.Item
-            name="password"
-            rules={[{ required: true, message: '请输入密码' }]}
-          >
-            <Input.Password
-              prefix={<LockOutlined />}
-              placeholder="密码"
-              autoComplete="current-password"
-              size="large"
-            />
-          </Form.Item>
-          <Button
-            type="primary"
-            htmlType="submit"
-            block
-            size="large"
-            loading={submitting}
-            style={{ marginTop: 8 }}
-          >
-            登录
-          </Button>
-        </Form>
-      </Card>
+              loading={submitting}
+              style={{ marginTop: 8 }}
+            >
+              登录
+            </Button>
+          </Form>
+        </div>
+      </main>
     </div>
   )
 }
