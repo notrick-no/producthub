@@ -12,7 +12,7 @@
   - PATCH 的 category_ids: 缺席=不动;[] = 清空;[1,2] = 替换
   - monthly_visits 存原始整数,禁止负数
 """
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -279,3 +279,86 @@ class UserUpdate(BaseModel):
         if isinstance(v, str) and not v.strip():
             return None
         return v
+
+
+# ---------- 需求 / 动态(第四版)----------
+# 需求四个枚举字段都存中文(与产品状态一个路数),取值须与前端 src/requirementMeta.ts
+# 的数组保持一致。字段全可空,方便先把需求记下来、细节以后再补。
+
+REQUIREMENT_PRIORITIES = ("高", "中", "低")
+REQUIREMENT_SOURCES = ("用户反馈", "内部提出", "竞品分析", "数据分析")
+PRODUCT_TYPES = ("网站", "移动 App", "小程序", "桌面端", "浏览器插件", "其他")
+REQUIREMENT_STATUSES = ("待评估", "已排期", "进行中", "已完成", "已搁置")
+
+RequirementPriority = Literal["高", "中", "低"]
+RequirementSource = Literal["用户反馈", "内部提出", "竞品分析", "数据分析"]
+ProductType = Literal["网站", "移动 App", "小程序", "桌面端", "浏览器插件", "其他"]
+RequirementStatus = Literal["待评估", "已排期", "进行中", "已完成", "已搁置"]
+
+
+class RequirementBase(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    description: str = Field(min_length=1, max_length=255)  # 需求描述(标题)
+    detail: str | None = None  # 需求详情(长文)
+    priority: RequirementPriority | None = None
+    source: RequirementSource | None = None
+    product_type: ProductType | None = None
+    proposed_on: date | None = None  # 提出日期
+    status: RequirementStatus | None = None
+    estimated_days: int | None = Field(default=None, ge=0)  # 预估投入天数
+    due_on: date | None = None  # 预计交付日期
+    link_url: str | None = Field(default=None, max_length=2048)  # 相关资料链接
+    note: str | None = None
+
+    @field_validator("link_url", mode="before")
+    @classmethod
+    def _blank_link_to_none(cls, v):
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
+
+
+class RequirementCreate(RequirementBase):
+    """POST /api/requirements 请求体。"""
+
+
+class RequirementUpdate(RequirementBase):
+    """PATCH /api/requirements/{id} 请求体。全部可选;缺席即不改。"""
+
+    description: str | None = Field(default=None, min_length=1, max_length=255)
+
+
+class RequirementRead(RequirementBase):
+    model_config = ConfigDict(from_attributes=True, str_strip_whitespace=True)
+
+    id: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class ActivityEventRead(BaseModel):
+    """首页动态流里的一条。
+
+    `url` 由后端按内容类型拼(见 app/content_types.py),前端不用知道路径怎么拼;
+    **删除事件为 None** —— 对象已经没了,渲染成链接只会在点击时 404。
+    """
+
+    id: int
+    actor_name: str
+    action: str  # create / update / delete
+    content_type: str
+    content_type_name: str  # 中文名,如「产品」
+    title: str
+    object_id: int
+    url: str | None
+    created_at: datetime
+
+
+class SummaryItem(BaseModel):
+    """首页「项目汇总」的一张卡:某类内容的现有条数。"""
+
+    key: str
+    name: str  # 中文名,如「需求」
+    count: int
+    url: str

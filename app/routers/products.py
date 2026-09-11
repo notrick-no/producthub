@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
+from .. import crud
 from ..db import get_db
 from ..deps import get_current_user
 from ..models import (
@@ -26,6 +27,7 @@ from ..models import (
     ProductCategory,
     ProductImage,
     ProductPriceTier,
+    User,
 )
 from ..schemas import (
     CategoryRead,
@@ -68,6 +70,17 @@ def _load_product(db: Session, product_id: int) -> Product | None:
             selectinload(Product.images),
         )
     ).first()
+
+
+def _load_or_404(db: Session, product_id: int) -> Product:
+    """同上,但取不到直接 404。
+
+    产品要预加载三张子表,所以这里没用 crud.get_or_404(那个走 db.get,不预加载)。
+    """
+    product = _load_product(db, product_id)
+    if product is None:
+        raise HTTPException(status_code=404, detail="产品不存在")
+    return product
 
 
 def _to_read(product: Product) -> ProductRead:
@@ -143,7 +156,11 @@ def _add_price_tiers(db: Session, product_id: int, tiers: list[PriceTierInput]) 
 
 
 @router.post("/products", response_model=ProductRead, status_code=201)
-def create_product(body: ProductCreate, db: Session = Depends(get_db)):
+def create_product(
+    body: ProductCreate,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     category_ids = _require_categories_exist(db, body.category_ids)
 
     product = Product(**{field: getattr(body, field) for field in _SCALAR_FIELDS})
@@ -154,25 +171,24 @@ def create_product(body: ProductCreate, db: Session = Depends(get_db)):
         db.add(ProductCategory(product_id=product.id, category_id=category_id))
     _add_price_tiers(db, product.id, body.price_tiers)
 
+    crud.record_event(db, user, crud.ACTION_CREATE, "product", product)
     db.commit()
     return _to_read(_load_product(db, product.id))
 
 
 @router.get("/products/{product_id}", response_model=ProductRead)
 def get_product(product_id: int, db: Session = Depends(get_db)):
-    product = _load_product(db, product_id)
-    if product is None:
-        raise HTTPException(status_code=404, detail="产品不存在")
-    return _to_read(product)
+    return _to_read(_load_or_404(db, product_id))
 
 
 @router.patch("/products/{product_id}", response_model=ProductRead)
 def update_product(
-    product_id: int, body: ProductUpdate, db: Session = Depends(get_db)
+    product_id: int,
+    body: ProductUpdate,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
-    product = _load_product(db, product_id)
-    if product is None:
-        raise HTTPException(status_code=404, detail="产品不存在")
+    product = _load_or_404(db, product_id)
 
     payload = body.model_dump(exclude_unset=True)
 
@@ -202,19 +218,23 @@ def update_product(
                 )
             )
 
-    for field in _SCALAR_FIELDS:
-        if field in payload:
-            setattr(product, field, payload[field])
+    # 标量字段走白名单(category_ids / price_tiers 上面已单独处理)
+    crud.apply_patch(product, payload, _SCALAR_FIELDS)
+    crud.record_event(db, user, crud.ACTION_UPDATE, "product", product)
 
     db.commit()
     return _to_read(_load_product(db, product.id))
 
 
 @router.delete("/products/{product_id}", status_code=204)
-def delete_product(product_id: int, db: Session = Depends(get_db)):
-    product = db.get(Product, product_id)
-    if product is None:
-        raise HTTPException(status_code=404, detail="产品不存在")
+def delete_product(
+    product_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    product = crud.get_or_404(db, Product, product_id, "产品")
+    # 先记动态再删:提交之后就读不到它的标题了
+    crud.record_event(db, user, crud.ACTION_DELETE, "product", product)
     db.delete(product)
     db.commit()
 
@@ -255,8 +275,7 @@ def upload_image(
     product_id: int, file: UploadFile = File(...), db: Session = Depends(get_db)
 ):
     """上传一张图片:校验类型/大小 → 落盘 uploads/ → 入库元数据。"""
-    if db.get(Product, product_id) is None:
-        raise HTTPException(status_code=404, detail="产品不存在")
+    crud.get_or_404(db, Product, product_id, "产品")
 
     ext = image_ext(file.content_type or "")
     if ext is None:

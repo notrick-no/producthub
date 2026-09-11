@@ -8,9 +8,13 @@ import ChangePasswordPage from './pages/ChangePasswordPage'
 import SetPasswordPage from './pages/SetPasswordPage'
 
 // 路由级懒加载:每个页面独立 chunk,首屏只加载用到的
+const HomePage = lazy(() => import('./pages/HomePage'))
 const ProductList = lazy(() => import('./pages/ProductList'))
 const ProductFormPage = lazy(() => import('./pages/ProductFormPage'))
 const ProductDetail = lazy(() => import('./pages/ProductDetail'))
+const RequirementList = lazy(() => import('./pages/RequirementList'))
+const RequirementDetail = lazy(() => import('./pages/RequirementDetail'))
+const RequirementFormPage = lazy(() => import('./pages/RequirementFormPage'))
 const AccountsPage = lazy(() => import('./pages/AccountsPage'))
 
 function PageFallback() {
@@ -38,10 +42,17 @@ export default function App() {
           {/* 业务区:登录 + 改密门禁 */}
           <Route element={<RequireAuth />}>
             <Route element={<AppLayout />}>
-              <Route path="/" element={<ProductList />} />
+              <Route path="/" element={<HomePage />} />
+
+              <Route path="/products" element={<ProductList />} />
               <Route path="/products/new" element={<ProductFormPage />} />
               <Route path="/products/:id" element={<ProductDetail />} />
               <Route path="/products/:id/edit" element={<ProductFormPage />} />
+
+              <Route path="/requirements" element={<RequirementList />} />
+              <Route path="/requirements/new" element={<RequirementFormPage />} />
+              <Route path="/requirements/:id" element={<RequirementDetail />} />
+              <Route path="/requirements/:id/edit" element={<RequirementFormPage />} />
 
               {/* 账号管理:仅管理员 */}
               <Route element={<RequireAdmin />}>

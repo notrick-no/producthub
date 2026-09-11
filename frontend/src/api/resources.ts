@@ -2,16 +2,41 @@
 
 import { del, get, patch, post, postForm } from './client'
 import type {
+  ActivityEvent,
   Category,
   CategoryPayload,
   LoginPayload,
   Product,
   ProductImage,
   ProductPayload,
+  Requirement,
+  RequirementPayload,
+  SummaryItem,
   User,
   UserPatchPayload,
   UserPayload,
 } from '../types'
+
+/**
+ * 标准五件套的工厂:资源路径 + 类型进去,五个转发函数出来。
+ *
+ * 抽的是**这批逐字相同的转发函数**(原本分散在下面各处,已有十几份),
+ * 属于「稳定重复」。但**端点本身没被抽象**:像产品列表要按 ?category_id= 过滤、
+ * 用户要发邀请邮件,都照旧另写一个,不往工厂里加 if ——
+ * 工厂一旦开始按资源分叉,就是抽象过度。
+ *
+ * 全部写成箭头函数(不用 this),所以下面可以安全地 `export const x = api.get`。
+ */
+function crud<T, P>(basePath: string) {
+  return {
+    list: (): Promise<T[]> => get<T[]>(basePath),
+    get: (id: number): Promise<T> => get<T>(`${basePath}/${id}`),
+    create: (payload: P): Promise<T> => post<T>(basePath, payload),
+    update: (id: number, payload: Partial<P>): Promise<T> =>
+      patch<T>(`${basePath}/${id}`, payload),
+    remove: (id: number): Promise<void> => del(`${basePath}/${id}`),
+  }
+}
 
 // ---------- Auth(登录 / 登出 / 改密,HttpOnly cookie 会话) ----------
 export function login(payload: LoginPayload): Promise<User> {
@@ -36,44 +61,43 @@ export function setPassword(token: string, new_password: string): Promise<User> 
 }
 
 // ---------- Users(管理员账号管理) ----------
-export function listUsers(): Promise<User[]> {
-  return get<User[]>('/users')
-}
+// 没有「删除用户」端点,所以工厂的 remove 在这组里用不上(不用就不导出)。
+const users = crud<User, UserPayload>('/users')
 
-export function createUser(payload: UserPayload): Promise<User> {
-  return post<User>('/users', payload)
-}
+export const listUsers = users.list
 
+export const createUser = users.create
+
+/**
+ * 不收进工厂:PATCH /users 的载荷是 UserPatchPayload(能改 is_active),
+ * 和工厂的 Partial<UserPayload> 不是一回事 —— 形状不同就不是「重复」。
+ */
 export function updateUser(id: number, payload: UserPatchPayload): Promise<User> {
   return patch<User>(`/users/${id}`, payload)
 }
 
+/** 重置密码不是标准形状:要发邀请邮件,而且返回的不是 User。 */
 export function resetUserPassword(id: number): Promise<{ ok: boolean; email: string }> {
   return post<{ ok: boolean; email: string }>(`/users/${id}/reset-password`, {})
 }
 
 // ---------- Products ----------
+const products = crud<Product, ProductPayload>('/products')
+
+/** 列表要带按分类过滤,所以不走工厂的 list,自己写一个。 */
 export function listProducts(categoryId?: number): Promise<Product[]> {
   const query = categoryId ? `?category_id=${categoryId}` : ''
   return get<Product[]>(`/products${query}`)
 }
 
-export function getProduct(id: number): Promise<Product> {
-  return get<Product>(`/products/${id}`)
-}
+export const getProduct = products.get
 
-export function createProduct(payload: ProductPayload): Promise<Product> {
-  return post<Product>('/products', payload)
-}
+export const createProduct = products.create
 
 /** PATCH 语义:没传的字段不动;category_ids: 缺席=不动 / [] =清空 / [id]=替换 */
-export function updateProduct(id: number, payload: Partial<ProductPayload>): Promise<Product> {
-  return patch<Product>(`/products/${id}`, payload)
-}
+export const updateProduct = products.update
 
-export function deleteProduct(id: number): Promise<void> {
-  return del(`/products/${id}`)
-}
+export const deleteProduct = products.remove
 
 // ---------- Product images(产品素材) ----------
 export function uploadProductImage(productId: number, file: File): Promise<ProductImage> {
@@ -87,18 +111,37 @@ export function deleteProductImage(productId: number, imageId: number): Promise<
 }
 
 // ---------- Categories ----------
-export function listCategories(): Promise<Category[]> {
-  return get<Category[]>('/categories')
+const categories = crud<Category, CategoryPayload>('/categories')
+
+export const listCategories = categories.list
+
+export const createCategory = categories.create
+
+export const updateCategory = categories.update
+
+export const deleteCategory = categories.remove
+
+// ---------- Requirements(需求记录,第四版)----------
+// 五个端点都是标准形状,整组由工厂生成。
+const requirements = crud<Requirement, RequirementPayload>('/requirements')
+
+/** 列表按录入先后倒序(最新的在前);搜索在前端做,不走后端参数。 */
+export const listRequirements = requirements.list
+
+export const getRequirement = requirements.get
+
+export const createRequirement = requirements.create
+
+export const updateRequirement = requirements.update
+
+export const deleteRequirement = requirements.remove
+
+// ---------- 首页:最近动态 / 项目汇总(第四版)----------
+export function listActivity(limit = 20, offset = 0): Promise<ActivityEvent[]> {
+  return get<ActivityEvent[]>(`/activity?limit=${limit}&offset=${offset}`)
 }
 
-export function createCategory(payload: CategoryPayload): Promise<Category> {
-  return post<Category>('/categories', payload)
-}
-
-export function updateCategory(id: number, payload: Partial<CategoryPayload>): Promise<Category> {
-  return patch<Category>(`/categories/${id}`, payload)
-}
-
-export function deleteCategory(id: number): Promise<void> {
-  return del(`/categories/${id}`)
+/** 汇总条数按内容类型返回,前端直接渲染,不写死有哪几种。 */
+export function fetchSummary(): Promise<SummaryItem[]> {
+  return get<SummaryItem[]>('/summary')
 }

@@ -19,7 +19,7 @@ import type { Category } from '../types'
 interface Props {
   open: boolean
   onClose: () => void
-  /** 改名 / 删除成功后通知父级,让它刷新侧栏的分类列表 */
+  /** 改名 / 删除成功后通知父级,让它刷新产品分析页的分类下拉 */
   onChanged: () => void
 }
 
@@ -82,7 +82,7 @@ export default function CategoryManageModal({ open, onClose, onChanged }: Props)
     try {
       await updateCategory(renaming.id, { name })
       message.success(`已改名为「${name}」`)
-      // 本地同步 + 通知父级刷新侧栏
+      // 本地同步 + 通知父级刷新分类下拉
       setCats((prev) => prev.map((c) => (c.id === renaming.id ? { ...c, name } : c)))
       onChanged()
       setRenaming(null)
@@ -122,7 +122,7 @@ export default function CategoryManageModal({ open, onClose, onChanged }: Props)
             <Spin />
           </div>
         ) : cats.length === 0 ? (
-          <Empty description="还没有分类。可在左侧「新建分类」,或在新建记录时顺手创建" />
+          <Empty description="还没有分类。可在新建记录时顺手创建,或在产品分析页新建" />
         ) : (
           <>
             <Typography.Paragraph type="secondary" style={{ marginBottom: 8 }}>

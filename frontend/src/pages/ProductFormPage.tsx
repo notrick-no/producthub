@@ -105,7 +105,7 @@ export default function ProductFormPage() {
       })
       .catch((err) => {
         message.error(err instanceof Error ? err.message : '加载产品失败')
-        navigate('/', { replace: true })
+        navigate('/products', { replace: true })
       })
       .finally(() => setLoadingProduct(false))
   }, [isEdit, id])
@@ -291,7 +291,7 @@ export default function ProductFormPage() {
           <Button type="primary" onClick={handleSubmit} loading={saving}>
             {isEdit ? '保存修改' : '保存'}
           </Button>
-          <Button onClick={() => navigate('/')}>取消</Button>
+          <Button onClick={() => navigate('/products')}>取消</Button>
         </Space>
       </Form>
     </Card>

@@ -118,3 +118,87 @@ export interface ProductPayload {
   /** 缺席=不动;[] = 清空;数组 = 整组替换 */
   price_tiers?: PriceTierInput[]
 }
+
+// ---------- 需求记录(第四版)----------
+// 与后端 schemas.RequirementBase / models.Requirement 对齐。
+// 「需求描述」是标题(列表页那一列),「需求详情」是长文(只在详情页展开)。
+
+/** 四组取值须与后端 schemas.py 的同名元组一致(都存中文)。 */
+export const REQUIREMENT_PRIORITIES = ['高', '中', '低'] as const
+export type RequirementPriority = (typeof REQUIREMENT_PRIORITIES)[number]
+
+export const REQUIREMENT_SOURCES = ['用户反馈', '内部提出', '竞品分析', '数据分析'] as const
+export type RequirementSource = (typeof REQUIREMENT_SOURCES)[number]
+
+/** 产品类型是固定枚举,不复用「分类」表(第四版定稿)。 */
+export const PRODUCT_TYPES = ['网站', '移动 App', '小程序', '桌面端', '浏览器插件', '其他'] as const
+export type ProductType = (typeof PRODUCT_TYPES)[number]
+
+export const REQUIREMENT_STATUSES = ['待评估', '已排期', '进行中', '已完成', '已搁置'] as const
+export type RequirementStatus = (typeof REQUIREMENT_STATUSES)[number]
+
+export interface Requirement {
+  id: number
+  /** 需求描述:一句话,必填 */
+  description: string
+  /** 需求详情:长文,可空 */
+  detail?: string | null
+  priority?: RequirementPriority | null
+  source?: RequirementSource | null
+  product_type?: ProductType | null
+  /** YYYY-MM-DD */
+  proposed_on?: string | null
+  status?: RequirementStatus | null
+  estimated_days?: number | null
+  /** YYYY-MM-DD */
+  due_on?: string | null
+  link_url?: string | null
+  note?: string | null
+  created_at: string
+  updated_at: string
+}
+
+/** 提交一条需求(新建必填 description;编辑传 Partial)。 */
+export interface RequirementPayload {
+  description: string
+  detail?: string | null
+  priority?: RequirementPriority | null
+  source?: RequirementSource | null
+  product_type?: ProductType | null
+  proposed_on?: string | null
+  status?: RequirementStatus | null
+  estimated_days?: number | null
+  due_on?: string | null
+  link_url?: string | null
+  note?: string | null
+}
+
+// ---------- 首页:最近动态 / 项目汇总(第四版)----------
+
+export const ACTIVITY_ACTIONS = ['create', 'update', 'delete'] as const
+export type ActivityAction = (typeof ACTIVITY_ACTIONS)[number]
+
+/** 一条动态。actor_name 与 title 都是**快照** —— 用户改名、对象被删,历史都不变。 */
+export interface ActivityEvent {
+  id: number
+  actor_name: string
+  action: ActivityAction
+  /** CONTENT_TYPES 的 key,如 "product" */
+  content_type: string
+  /** 内容类型的中文名,如 "产品" */
+  content_type_name: string
+  title: string
+  object_id: number
+  /** 后端按内容类型拼好的跳转地址;删除事件为 null(对象没了,点进去只会 404) */
+  url: string | null
+  created_at: string
+}
+
+/** 汇总里的一张卡。后端多返回一种内容类型,前端就自动多一张卡。 */
+export interface SummaryItem {
+  key: string
+  name: string
+  count: number
+  /** 点进去的列表页地址 */
+  url: string
+}

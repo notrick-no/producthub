@@ -22,15 +22,7 @@ import {
 } from '../api/resources'
 import type { User, UserPayload } from '../types'
 import { useAuth } from '../auth/AuthContext'
-
-function formatTime(iso: string): string {
-  const d = new Date(iso)
-  return d.toLocaleDateString('zh-CN', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  })
-}
+import { formatFullDate } from '../format'
 
 /** 管理员账号管理:列表 + 新建(邀请邮件)+ 启停 + 重置密码。 */
 export default function AccountsPage() {
@@ -135,7 +127,12 @@ export default function AccountsPage() {
       render: (set: boolean) =>
         set ? <Typography.Text type="secondary">已设置</Typography.Text> : <Tag color="orange">待邀请</Tag>,
     },
-    { title: '创建时间', dataIndex: 'created_at', width: 110, render: (v: string) => formatTime(v) },
+    {
+      title: '创建时间',
+      dataIndex: 'created_at',
+      width: 110,
+      render: (v: string) => formatFullDate(v),
+    },
     {
       title: '操作',
       key: 'actions',

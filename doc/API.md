@@ -28,7 +28,7 @@ REST 风格,统一前缀 `/api`,请求/响应均为 JSON,字段 snake_case。字
 
 ### 认证(第三版)
 
-- 业务接口(**Products / Categories / Users**)都要登录:请求带会话 cookie
+- 业务接口(**Products / Categories / Requirements / Users / Activity / Summary**)都要登录:请求带会话 cookie
   `producthub_session`(登录时 `Set-Cookie`,`HttpOnly + SameSite=Lax`,仅 https 站点带 `Secure`)。
   未登录一律 `401`;被管理员禁用 → `401`;登录但未过改密门禁 / 非管理员 → `403`。
 - `Auth` 一节内的登录/登出/改密接口,以及 `/api/health`、`/uploads`(产品图片)保持公开。
@@ -231,7 +231,130 @@ REST 风格,统一前缀 `/api`,请求/响应均为 JSON,字段 snake_case。字
 
 ---
 
+## Requirements 需求记录(第四版)
+
+> 需登录(`401` 未登录);需求由全员共享。
+
+**响应形状**(单条):
+
+```json
+{
+  "id": 3,
+  "description": "支持把研究记录导出成 CSV",
+  "detail": "背景:目前只能一条条复制…",
+  "priority": "高",
+  "source": "用户反馈",
+  "product_type": "网站",
+  "proposed_on": "2026-09-01",
+  "status": "已排期",
+  "estimated_days": 5,
+  "due_on": "2026-09-20",
+  "link_url": "https://example.com/issues/1",
+  "note": null,
+  "created_at": "2026-09-11T10:00:00+08:00",
+  "updated_at": "2026-09-11T10:00:00+08:00"
+}
+```
+
+**字段**:`description`(**需求描述**,即标题,≤255 必填)与 `detail`(**需求详情**,长文,可空)
+是两个字段,列表页只显示前者。日期一律 `YYYY-MM-DD` 字符串。四个枚举字段都**存中文**、都可空:
+
+| 字段 | 取值 |
+| --- | --- |
+| `priority` | 高 / 中 / 低 |
+| `source` | 用户反馈 / 内部提出 / 竞品分析 / 数据分析 |
+| `product_type` | 网站 / 移动 App / 小程序 / 桌面端 / 浏览器插件 / 其他 |
+| `status` | 待评估 / 已排期 / 进行中 / 已完成 / 已搁置 |
+
+产品类型是**固定枚举**,不复用「分类」表(第四版定稿)。取值表在后端 `app/schemas.py`
+(`REQUIREMENT_PRIORITIES` 等四个元组),前端 `frontend/src/types.ts` 的同名 `as const` 数组与之对应。
+
+### GET /api/requirements
+按 id **降序**(最新的在最前)→ `200`。搜索由前端在结果里过滤,没有查询参数。
+
+### POST /api/requirements
+- 请求体:`description` 必填(去空白后为空 → `422`);`estimated_days` 整数 ≥0;
+  `link_url` ≤2048、空串按 null;其余字段可空
+- → `201` 返回完整对象;非法枚举值 / 非法日期 → `422`
+
+### GET /api/requirements/{id}
+→ `200` / `404`
+
+### PATCH /api/requirements/{id}
+- 请求体任意字段缺席不改动;清空某字段传 `null`
+- → `200` / `404` / `422`
+
+### DELETE /api/requirements/{id}
+→ `204` / `404`
+
+---
+
+## Activity 最近动态(第四版)
+
+> 需登录。动态由各**写端点**在成功时记一条(见「事件记录」),对象删除后事件仍在。
+
+**响应形状**(数组元素):
+
+```json
+{
+  "id": 12,
+  "actor_name": "张三",
+  "action": "update",
+  "content_type": "requirement",
+  "content_type_name": "需求",
+  "title": "支持把研究记录导出成 CSV",
+  "object_id": 3,
+  "url": "/requirements/3",
+  "created_at": "2026-09-11T10:05:00+08:00"
+}
+```
+
+- `action ∈ {create, update, delete}`。
+- `actor_name` 与 `title` 都是**快照**:用户改名、对象被删之后,历史动态仍显示当时的名字与标题。
+- `url` 由后端按内容类型拼好(前端不拼路径);**`action="delete"` 时为 `null`** —— 对象已经没了,
+  给链接只会点出 404,前端据此把该行渲染成纯文本。
+
+### GET /api/activity
+- 查询参数:`limit`(默认 20,1–100)、`offset`(默认 0,≥0);越界 → `422`
+- 按 `created_at` 降序,同一秒内按 `id` 降序兜底 → `200` `ActivityEvent[]`
+
+### 事件记录(哪些操作会产生动态)
+
+| 操作 | 是否记动态 |
+| --- | --- |
+| 产品 新建 / 更新 / 删除 | ✅ |
+| 需求 新建 / 更新 / 删除 | ✅ |
+| 分类 新建 / 改名 / 删除 | ❌ 分类是标签不是内容,记了会把动态稀释成流水账 |
+| 产品图片上传 / 删除 | ❌ 归属在产品这条动态下 |
+
+记录点在写端点里**显式一行** `crud.record_event(...)`(删除时在 `db.delete` **之前**调用,
+否则读不到标题快照)。漏记不会报错,由 `tests/test_activity.py` 逐操作断言兜住。
+
+---
+
+## Summary 项目汇总(第四版)
+
+### GET /api/summary
+
+```json
+[
+  { "key": "product", "name": "产品", "count": 12, "url": "/products" },
+  { "key": "requirement", "name": "需求", "count": 5, "url": "/requirements" }
+]
+```
+
+每种内容类型现有多少条,顺序同后端 `app/content_types.py` 的 `CONTENT_TYPES`。
+**本版只返回已启用的类型**(会议 / 博客未做,不返回 —— 显示一张永远是 0 的卡会让人以为坏了)。
+前端直接渲染这个数组、不写死有哪几种:以后加会议,后端多返回一项,前端零改动。
+
+---
+
 ## 前端接口对照
 
 `frontend/src/api/resources.ts` 与上面一一对应,统一走 `client.ts`(自动处理错误与 204)。
 改后端契约时,同步改 `app/schemas.py` → `frontend/src/types.ts` → `resources.ts`。
+
+标准五件套(list / get / create / update / remove)的转发函数由 `resources.ts` 里的
+`crud<T>(basePath)` 工厂生成(第四版收敛,此前有十几份逐字相同的副本)。**端点本身不抽象**:
+产品列表要按 `?category_id=` 过滤、用户 PATCH 的载荷是 `UserPatchPayload`、重置密码要发邮件,
+这些形状不同的照旧各自显式写,不往工厂里加 if。

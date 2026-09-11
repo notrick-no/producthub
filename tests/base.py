@@ -101,7 +101,8 @@ class ApiTestCase(unittest.TestCase):
         with SessionLocal() as db:
             db.execute(
                 text(
-                    "TRUNCATE product_categories, product_price_tiers, "
+                    "TRUNCATE activity_events, requirements, "
+                    "product_categories, product_price_tiers, "
                     "product_images, products, categories, users, sessions "
                     "RESTART IDENTITY CASCADE"
                 )
@@ -178,5 +179,13 @@ class ApiTestCase(unittest.TestCase):
         if category_ids is not None:
             payload["category_ids"] = category_ids
         r = self.client.post("/api/products", json=payload)
+        self.assertEqual(r.status_code, 201, r.text)
+        return r.json()
+
+    def new_requirement(self, description: str = "示例需求", **fields) -> dict:
+        """POST 新建一条需求,断言 201 后返回响应 JSON。"""
+        r = self.client.post(
+            "/api/requirements", json={"description": description, **fields}
+        )
         self.assertEqual(r.status_code, 201, r.text)
         return r.json()
