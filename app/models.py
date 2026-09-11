@@ -10,10 +10,21 @@
   - 除 name 外内容字段都允许为空(调研早期信息可能不全)
   - url 唯一,避免同一网站重复录入
 """
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text, func, text
+from sqlalchemy import (
+    Boolean,
+    Date,
+    DateTime,
+    ForeignKey,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    func,
+    text,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -187,16 +198,20 @@ class User(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
-    sessions: Mapped[list["Session"]] = relationship(
+    sessions: Mapped[list["AuthSession"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
 
 
-class Session(Base):
+class AuthSession(Base):
     """一次登录会话:随机 token 的 sha256 存这里,明文只放 HttpOnly cookie。
 
     显式记录以便「禁用员工 / 重置密码」时一键踢掉该用户全部会话;
     过期或删除后需重新登录。token 本身用 secrets 生成,库里只存哈希。
+
+    类名不叫 Session:那个名字被 SQLAlchemy 的会话占着,叫 Session 的话每个
+    import 点都得写成 `Session as AuthSession`,读的人还以为存在两个东西。
+    表名仍是 sessions,不动库、不需要迁移。
     """
 
     __tablename__ = "sessions"
@@ -212,3 +227,60 @@ class Session(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
     user: Mapped[User] = relationship(back_populates="sessions")
+
+
+class Requirement(Base):
+    """一条需求记录(第四版)。
+
+    「需求描述」是标题(一句话,列表页显示的那一列),「需求详情」是长文(详情页展开)。
+    四个枚举字段(优先级 / 需求来源 / 产品类型 / 进展状态)都存中文,
+    取值见 schemas.REQUIREMENT_*;字段全可空,方便先记下来再补。
+    """
+
+    __tablename__ = "requirements"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    description: Mapped[str] = mapped_column(String(255))  # 需求描述(标题)
+    detail: Mapped[str | None] = mapped_column(Text)  # 需求详情
+    priority: Mapped[str | None] = mapped_column(String(20))  # 优先级:高/中/低
+    source: Mapped[str | None] = mapped_column(String(50))  # 需求来源
+    product_type: Mapped[str | None] = mapped_column(String(20))  # 产品类型
+    proposed_on: Mapped[date | None] = mapped_column(Date)  # 提出日期
+    status: Mapped[str | None] = mapped_column(String(20))  # 进展状态
+    estimated_days: Mapped[int | None] = mapped_column(Integer)  # 预估投入天数
+    due_on: Mapped[date | None] = mapped_column(Date)  # 预计交付日期
+    link_url: Mapped[str | None] = mapped_column(String(2048))  # 相关资料链接
+    note: Mapped[str | None] = mapped_column(Text)  # 备注
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class ActivityEvent(Base):
+    """首页「最近动态」里的一条(第四版):谁、何时、对哪个内容、做了什么。
+
+    `actor_name` 与 `title` 都是**快照**:用户会改名、对象会被删,
+    动态流不能因为源数据变了就变成空白或 404 —— 所以记下当时的名字和标题。
+
+    `object_id` 在对象被删之后依然留着(删除事件本身也是动态),前端看 `action`
+    决定要不要渲染成链接(delete 的对象已经不存在了,点了只会 404)。
+    内容类型取值见 app/content_types.py。
+    """
+
+    __tablename__ = "activity_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    actor_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    actor_name: Mapped[str] = mapped_column(String(255))  # 操作人姓名快照
+    action: Mapped[str] = mapped_column(String(20))  # create / update / delete
+    content_type: Mapped[str] = mapped_column(String(50))  # CONTENT_TYPES 的 key
+    object_id: Mapped[int] = mapped_column(Integer)  # 对象 id(删后仍保留)
+    title: Mapped[str] = mapped_column(String(255))  # 对象标题快照
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )

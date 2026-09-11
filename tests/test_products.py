@@ -45,6 +45,9 @@ class ProductCreateTest(ApiTestCase):
             "/api/products", json={"name": "x", "category_ids": [1, 999]}
         )
         self.assertEqual(r.status_code, 400, r.text)
+        # 分类校验发生在插入产品之后(得先有 product.id 才能打标),所以这里必须确认
+        # 半截产品没留在库里:400 之后事务没提交,应当一行都不剩。
+        self.assertEqual(self.client.get("/api/products").json(), [])
 
     def test_create_blank_name_rejected(self):
         r = self.client.post("/api/products", json={"name": "   "})

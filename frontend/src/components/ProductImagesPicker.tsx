@@ -6,6 +6,17 @@ const { Dragger } = Upload
 
 const MAX_IMAGE_SIZE = 10 * 1024 * 1024 // 与后端一致:单张 ≤ 10 MB
 
+/** 已选中的一张图:文件本身 + 它的预览地址。 */
+interface PickedImage {
+  file: File
+  /**
+   * objectURL。在「选中」那一刻建好,渲染时只读。
+   * 原来是在渲染期现建现取(往 ref 里写),那样渲染就不再是纯的 ——
+   * React 可能渲染一遍又丢掉,丢掉的那遍就漏一个 objectURL 出去。
+   */
+  previewUrl: string
+}
+
 interface Props {
   /** 每次增删后把当前选中的文件数组交给父级;父级在保存后用它逐张上传。 */
   onChange: (files: File[]) => void
@@ -18,54 +29,47 @@ interface Props {
  */
 export default function ProductImagesPicker({ onChange }: Props) {
   const { message } = AntApp.useApp()
-  const [files, setFiles] = useState<File[]>([])
-  const urls = useRef(new Map<File, string>())
+  const [picked, setPicked] = useState<PickedImage[]>([])
 
-  // 每张缩略图一个 objectURL;组件卸载时统一回收
+  // 卸载时回收还没被移除的那些 objectURL。
+  // 用 ref 记当前值,是为了让卸载清理只挂一次(依赖为空),不必每次增删重挂。
+  const pickedRef = useRef<PickedImage[]>([])
+  useEffect(() => {
+    pickedRef.current = picked
+  }, [picked])
   useEffect(
     () => () => {
-      urls.current.forEach((url) => URL.revokeObjectURL(url))
+      pickedRef.current.forEach((p) => URL.revokeObjectURL(p.previewUrl))
     },
     [],
   )
 
-  const urlOf = (f: File): string => {
-    let url = urls.current.get(f)
-    if (!url) {
-      url = URL.createObjectURL(f)
-      urls.current.set(f, url)
-    }
-    return url
-  }
-
-  const commit = (next: File[]) => {
-    setFiles(next)
-    onChange(next)
+  const commit = (next: PickedImage[]) => {
+    setPicked(next)
+    onChange(next.map((p) => p.file))
   }
 
   const addFiles = (incoming: File[]) => {
-    const ok: File[] = []
-    for (const f of incoming) {
-      if (!f.type.startsWith('image/')) {
-        message.warning(`${f.name}: 只支持图片`)
+    const ok: PickedImage[] = []
+    for (const file of incoming) {
+      if (!file.type.startsWith('image/')) {
+        message.warning(`${file.name}: 只支持图片`)
         continue
       }
-      if (f.size > MAX_IMAGE_SIZE) {
-        message.warning(`${f.name}: 不能超过 10 MB`)
+      if (file.size > MAX_IMAGE_SIZE) {
+        message.warning(`${file.name}: 不能超过 10 MB`)
         continue
       }
-      if (!files.some((x) => x === f)) ok.push(f) // 已选的不重复加
+      if (!picked.some((p) => p.file === file)) {
+        ok.push({ file, previewUrl: URL.createObjectURL(file) }) // 已选的不重复加
+      }
     }
-    if (ok.length) commit([...files, ...ok])
+    if (ok.length) commit([...picked, ...ok])
   }
 
-  const remove = (f: File) => {
-    const url = urls.current.get(f)
-    if (url) {
-      URL.revokeObjectURL(url)
-      urls.current.delete(f)
-    }
-    commit(files.filter((x) => x !== f))
+  const remove = (target: PickedImage) => {
+    URL.revokeObjectURL(target.previewUrl)
+    commit(picked.filter((p) => p !== target))
   }
 
   return (
@@ -86,11 +90,11 @@ export default function ProductImagesPicker({ onChange }: Props) {
         </p>
       </Dragger>
 
-      {files.length > 0 && (
+      {picked.length > 0 && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 12 }}>
-          {files.map((f) => (
+          {picked.map((p) => (
             <div
-              key={urlOf(f)}
+              key={p.previewUrl}
               style={{
                 position: 'relative',
                 border: '1px solid #f0f0f0',
@@ -100,8 +104,8 @@ export default function ProductImagesPicker({ onChange }: Props) {
               }}
             >
               <img
-                src={urlOf(f)}
-                alt={f.name}
+                src={p.previewUrl}
+                alt={p.file.name}
                 width={96}
                 height={64}
                 style={{ objectFit: 'cover', borderRadius: 4, display: 'block' }}
@@ -113,7 +117,7 @@ export default function ProductImagesPicker({ onChange }: Props) {
                   danger
                   icon={<CloseOutlined />}
                   style={{ position: 'absolute', top: 2, right: 2 }}
-                  onClick={() => remove(f)}
+                  onClick={() => remove(p)}
                 />
               </Tooltip>
               <Typography.Text
@@ -131,7 +135,7 @@ export default function ProductImagesPicker({ onChange }: Props) {
                   textShadow: '0 1px 2px rgba(0,0,0,.6)',
                 }}
               >
-                {f.name}
+                {p.file.name}
               </Typography.Text>
             </div>
           ))}

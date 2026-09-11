@@ -24,8 +24,9 @@ import {
 } from '../api/resources'
 import type { Category, ProductPayload, ProductStatus } from '../types'
 import { PRODUCT_STATUSES } from '../types'
-import PriceTierEditor, { collectPriceTiers, priceTierToDraft } from '../components/PriceTierEditor'
-import type { PriceTierDraft } from '../components/PriceTierEditor'
+import PriceTierEditor from '../components/PriceTierEditor'
+import { collectPriceTiers, priceTierToDraft } from '../priceTierModel'
+import type { PriceTierDraft } from '../priceTierModel'
 import ProductImagesPicker from '../components/ProductImagesPicker'
 
 const { TextArea } = Input
@@ -58,6 +59,24 @@ function toPayload(values: FormValues): ProductPayload {
     tech_analysis: text(values.tech_analysis),
     category_ids: values.category_ids ?? [],
   }
+}
+
+/**
+ * 把新建时暂存的图片逐张传到刚建好的产品上,返回上传失败的文件名。
+ *
+ * 故意不抛异常:这时产品已经建好了,图片传不上去只是「少了几张图」,不该把整个
+ * 保存算成失败 —— 提示一声,让用户去详情页补传。
+ */
+async function uploadPending(productId: number, files: File[]): Promise<string[]> {
+  const failed: string[] = []
+  for (const file of files) {
+    try {
+      await uploadProductImage(productId, file)
+    } catch {
+      failed.push(file.name)
+    }
+  }
+  return failed
 }
 
 /** 新建(/products/new)与编辑(/products/:id/edit)共用的产品表单页。 */
@@ -105,7 +124,7 @@ export default function ProductFormPage() {
       })
       .catch((err) => {
         message.error(err instanceof Error ? err.message : '加载产品失败')
-        navigate('/', { replace: true })
+        navigate('/products', { replace: true })
       })
       .finally(() => setLoadingProduct(false))
   }, [isEdit, id])
@@ -134,24 +153,21 @@ export default function ProductFormPage() {
     }
 
     setSaving(true)
-    const payload = toPayload(values)
-    payload.price_tiers = collectPriceTiers(priceTiers).price_tiers ?? []
     try {
-      const saved = isEdit ? await updateProduct(Number(id), payload) : await createProduct(payload)
-      message.success(isEdit ? '已保存修改' : `已创建「${saved.name}」`)
+      const payload = toPayload(values)
+      payload.price_tiers = collectPriceTiers(priceTiers).price_tiers ?? []
+
       if (isEdit) {
+        await updateProduct(Number(id), payload)
+        message.success('已保存修改')
         navigate(`/products/${Number(id)}`)
         return
       }
-      // 新建:把暂存的图片逐张传上去,再去详情页(补图/删除都在详情页)
-      const failed: string[] = []
-      for (const f of pendingImages) {
-        try {
-          await uploadProductImage(saved.id, f)
-        } catch {
-          failed.push(f.name)
-        }
-      }
+
+      const saved = await createProduct(payload)
+      message.success(`已创建「${saved.name}」`)
+      // 图片得等产品建出来才能传,所以只能放在创建之后
+      const failed = await uploadPending(saved.id, pendingImages)
       if (failed.length > 0) {
         message.warning(
           `${failed.length} 张图片上传失败: ${failed.join('、')}。产品已创建,可到详情页补传。`,
@@ -175,11 +191,13 @@ export default function ProductFormPage() {
 
   return (
     <Card title={isEdit ? '编辑记录' : '新建记录'} style={{ maxWidth: 760 }}>
+      {/* status 不给默认值:留空 = 未设置(见该字段 tooltip)。写死任何中文状态都只能是
+          后端 PRODUCT_STATUSES 里的四个之一,否则新建直接被 422 拒掉。 */}
       <Form<FormValues>
         form={form}
         layout="vertical"
         onFinish={handleSubmit}
-        initialValues={{ category_ids: [], status: '调研中' }}
+        initialValues={{ category_ids: [] }}
       >
         <Typography.Title level={5}>基础信息</Typography.Title>
         <Form.Item
@@ -291,7 +309,7 @@ export default function ProductFormPage() {
           <Button type="primary" onClick={handleSubmit} loading={saving}>
             {isEdit ? '保存修改' : '保存'}
           </Button>
-          <Button onClick={() => navigate('/')}>取消</Button>
+          <Button onClick={() => navigate('/products')}>取消</Button>
         </Space>
       </Form>
     </Card>

@@ -97,15 +97,15 @@ class ApiTestCase(unittest.TestCase):
 
     # ---------- 数据清理 ----------
     def _truncate_all(self) -> None:
-        """清空全部表并重置自增 id,保证每个用例从空白库开始。"""
+        """清空全部表并重置自增 id,保证每个用例从空白库开始。
+
+        表名从 metadata 推导,不写死列表 —— 原来写死时,新加一张表忘了往里加,
+        数据就会在用例之间泄漏,症状是「某个用例偶发失败」,极难查。
+        现在 models.py 一加表,这里自动跟上。
+        """
+        tables = ", ".join(t.name for t in models.Base.metadata.sorted_tables)
         with SessionLocal() as db:
-            db.execute(
-                text(
-                    "TRUNCATE product_categories, product_price_tiers, "
-                    "product_images, products, categories, users, sessions "
-                    "RESTART IDENTITY CASCADE"
-                )
-            )
+            db.execute(text(f"TRUNCATE {tables} RESTART IDENTITY CASCADE"))
             db.commit()
 
     # ---------- 鉴权(第三版)----------
@@ -178,5 +178,13 @@ class ApiTestCase(unittest.TestCase):
         if category_ids is not None:
             payload["category_ids"] = category_ids
         r = self.client.post("/api/products", json=payload)
+        self.assertEqual(r.status_code, 201, r.text)
+        return r.json()
+
+    def new_requirement(self, description: str = "示例需求", **fields) -> dict:
+        """POST 新建一条需求,断言 201 后返回响应 JSON。"""
+        r = self.client.post(
+            "/api/requirements", json={"description": description, **fields}
+        )
         self.assertEqual(r.status_code, 201, r.text)
         return r.json()

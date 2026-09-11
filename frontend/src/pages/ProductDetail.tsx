@@ -13,14 +13,11 @@ import {
 import { ArrowLeftOutlined, DeleteOutlined, EditOutlined, GlobalOutlined } from '@ant-design/icons'
 import { deleteProduct, getProduct } from '../api/resources'
 import type { PriceTier, Product } from '../types'
-import { STATUS_COLOR } from '../statusMeta'
+import { PRODUCT_STATUS_COLOR } from '../productMeta'
+import { formatDate } from '../format'
 import ProductImagesCard from '../components/ProductImagesCard'
 
 const nf = new Intl.NumberFormat('zh-CN')
-
-function formatDate(iso: string): string {
-  return new Date(iso).toLocaleString('zh-CN', { dateStyle: 'medium', timeStyle: 'short' })
-}
 
 /** 一档价格显示成「金额/周期」;空金额 = 面议;0 = 免费。 */
 function priceAmount(t: PriceTier): string {
@@ -66,7 +63,7 @@ export default function ProductDetail() {
       .then(setProduct)
       .catch((err) => {
         message.error(err instanceof Error ? err.message : '加载产品失败')
-        navigate('/', { replace: true })
+        navigate('/products', { replace: true })
       })
       .finally(() => setLoading(false))
   }
@@ -77,7 +74,7 @@ export default function ProductDetail() {
     try {
       await deleteProduct(Number(id))
       message.success('已删除')
-      navigate('/', { replace: true })
+      navigate('/products', { replace: true })
     } catch (err) {
       message.error(err instanceof Error ? err.message : '删除失败')
     }
@@ -94,7 +91,7 @@ export default function ProductDetail() {
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
-      <Button type="text" icon={<ArrowLeftOutlined />} onClick={() => navigate('/')}>
+      <Button type="text" icon={<ArrowLeftOutlined />} onClick={() => navigate('/products')}>
         返回列表
       </Button>
 
@@ -131,7 +128,9 @@ export default function ProductDetail() {
           </div>
 
           <Space size={[4, 4]} wrap>
-            {product.status && <Tag color={STATUS_COLOR[product.status]}>{product.status}</Tag>}
+            {product.status && (
+              <Tag color={PRODUCT_STATUS_COLOR[product.status]}>{product.status}</Tag>
+            )}
             {product.categories.length > 0 ? (
               product.categories.map((c) => (
                 <Tag key={c.id} color="blue">

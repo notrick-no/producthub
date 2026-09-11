@@ -14,13 +14,22 @@ import {
 } from 'antd'
 import { DeleteOutlined, EditOutlined } from '@ant-design/icons'
 import { deleteCategory, listCategories, listProducts, updateCategory } from '../api/resources'
-import type { Category } from '../types'
+import type { Category, Product } from '../types'
 
 interface Props {
   open: boolean
   onClose: () => void
-  /** 改名 / 删除成功后通知父级,让它刷新侧栏的分类列表 */
+  /** 改名 / 删除成功后通知父级,让它刷新产品分析页的分类下拉 */
   onChanged: () => void
+}
+
+/** 分类 id → 使用它的产品数。 */
+function countByCategory(products: Product[]): Map<number, number> {
+  const counts = new Map<number, number>()
+  for (const p of products) {
+    for (const c of p.categories) counts.set(c.id, (counts.get(c.id) ?? 0) + 1)
+  }
+  return counts
 }
 
 /**
@@ -49,11 +58,7 @@ export default function CategoryManageModal({ open, onClose, onChanged }: Props)
       .then(([categoryList, products]) => {
         if (cancelled) return
         setCats(categoryList)
-        const m = new Map<number, number>()
-        for (const p of products) {
-          for (const c of p.categories) m.set(c.id, (m.get(c.id) ?? 0) + 1)
-        }
-        setCounts(m)
+        setCounts(countByCategory(products))
       })
       .catch((err) => {
         if (!cancelled) message.error(err instanceof Error ? err.message : '加载分类失败')
@@ -82,7 +87,7 @@ export default function CategoryManageModal({ open, onClose, onChanged }: Props)
     try {
       await updateCategory(renaming.id, { name })
       message.success(`已改名为「${name}」`)
-      // 本地同步 + 通知父级刷新侧栏
+      // 本地同步 + 通知父级刷新分类下拉
       setCats((prev) => prev.map((c) => (c.id === renaming.id ? { ...c, name } : c)))
       onChanged()
       setRenaming(null)
@@ -122,7 +127,7 @@ export default function CategoryManageModal({ open, onClose, onChanged }: Props)
             <Spin />
           </div>
         ) : cats.length === 0 ? (
-          <Empty description="还没有分类。可在左侧「新建分类」,或在新建记录时顺手创建" />
+          <Empty description="还没有分类。可在新建记录时顺手创建,或在产品分析页新建" />
         ) : (
           <>
             <Typography.Paragraph type="secondary" style={{ marginBottom: 8 }}>

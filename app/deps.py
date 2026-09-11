@@ -16,7 +16,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from .db import get_db
-from .models import Session as AuthSession
+from .models import AuthSession
 from .models import User
 from .security import app_base_url, hash_token, new_session_token
 
