@@ -22,7 +22,7 @@ from ..deps import (
     read_session_user,
     set_session_cookie,
 )
-from ..models import Session as AuthSession
+from ..models import AuthSession
 from ..models import User
 from ..schemas import (
     ChangePasswordRequest,

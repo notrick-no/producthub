@@ -13,7 +13,7 @@ import {
 import { ArrowLeftOutlined, DeleteOutlined, EditOutlined, GlobalOutlined } from '@ant-design/icons'
 import { deleteProduct, getProduct } from '../api/resources'
 import type { PriceTier, Product } from '../types'
-import { STATUS_COLOR } from '../statusMeta'
+import { PRODUCT_STATUS_COLOR } from '../productMeta'
 import { formatDate } from '../format'
 import ProductImagesCard from '../components/ProductImagesCard'
 
@@ -128,7 +128,9 @@ export default function ProductDetail() {
           </div>
 
           <Space size={[4, 4]} wrap>
-            {product.status && <Tag color={STATUS_COLOR[product.status]}>{product.status}</Tag>}
+            {product.status && (
+              <Tag color={PRODUCT_STATUS_COLOR[product.status]}>{product.status}</Tag>
+            )}
             {product.categories.length > 0 ? (
               product.categories.map((c) => (
                 <Tag key={c.id} color="blue">

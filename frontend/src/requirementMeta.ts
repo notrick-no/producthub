@@ -13,7 +13,9 @@ export const PRIORITY_COLOR: Record<RequirementPriority, string> = {
   低: 'default',
 }
 
-export const STATUS_COLOR: Record<RequirementStatus, string> = {
+/** 需求的「进展状态」颜色。名字里带 requirement:产品那边也有一个状态颜色表,
+ *  两个都叫 STATUS_COLOR 时,光看 import 那一行分不清是哪一个。 */
+export const REQUIREMENT_STATUS_COLOR: Record<RequirementStatus, string> = {
   待评估: 'default',
   已排期: 'blue',
   进行中: 'processing',

@@ -198,16 +198,20 @@ class User(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
-    sessions: Mapped[list["Session"]] = relationship(
+    sessions: Mapped[list["AuthSession"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
 
 
-class Session(Base):
+class AuthSession(Base):
     """一次登录会话:随机 token 的 sha256 存这里,明文只放 HttpOnly cookie。
 
     显式记录以便「禁用员工 / 重置密码」时一键踢掉该用户全部会话;
     过期或删除后需重新登录。token 本身用 secrets 生成,库里只存哈希。
+
+    类名不叫 Session:那个名字被 SQLAlchemy 的会话占着,叫 Session 的话每个
+    import 点都得写成 `Session as AuthSession`,读的人还以为存在两个东西。
+    表名仍是 sessions,不动库、不需要迁移。
     """
 
     __tablename__ = "sessions"

@@ -45,6 +45,7 @@ export default function ProductImagesCard({ productId, images, onReload }: Props
       onReload()
     } catch (err) {
       message.error(err instanceof Error ? err.message : '删除失败')
+    } finally {
       setBusy(false)
     }
   }

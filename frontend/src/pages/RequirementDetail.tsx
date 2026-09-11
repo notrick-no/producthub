@@ -22,8 +22,8 @@ import type { Requirement } from '../types'
 import {
   PRIORITY_COLOR,
   PRODUCT_TYPE_COLOR,
+  REQUIREMENT_STATUS_COLOR,
   SOURCE_COLOR,
-  STATUS_COLOR,
 } from '../requirementMeta'
 import { formatDate } from '../format'
 
@@ -118,7 +118,9 @@ export default function RequirementDetail() {
               <Tag color={PRIORITY_COLOR[requirement.priority]}>优先级 {requirement.priority}</Tag>
             )}
             {requirement.status && (
-              <Tag color={STATUS_COLOR[requirement.status]}>{requirement.status}</Tag>
+              <Tag color={REQUIREMENT_STATUS_COLOR[requirement.status]}>
+                {requirement.status}
+              </Tag>
             )}
           </Space>
 

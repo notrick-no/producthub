@@ -5,7 +5,11 @@ import type { TableColumnsType } from 'antd'
 import { PlusOutlined } from '@ant-design/icons'
 import { listRequirements } from '../api/resources'
 import type { Requirement } from '../types'
-import { PRIORITY_COLOR, PRODUCT_TYPE_COLOR, STATUS_COLOR } from '../requirementMeta'
+import {
+  PRIORITY_COLOR,
+  PRODUCT_TYPE_COLOR,
+  REQUIREMENT_STATUS_COLOR,
+} from '../requirementMeta'
 import { formatMonthDay } from '../format'
 import { useUrlParams } from '../useUrlParams'
 import ListToolbar from '../components/ListToolbar'
@@ -85,7 +89,7 @@ export default function RequirementList() {
       dataIndex: 'status',
       width: 110,
       render: (_, r) =>
-        r.status ? <Tag color={STATUS_COLOR[r.status]}>{r.status}</Tag> : null,
+        r.status ? <Tag color={REQUIREMENT_STATUS_COLOR[r.status]}>{r.status}</Tag> : null,
     },
     {
       title: '预计交付',

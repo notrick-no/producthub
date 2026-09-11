@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from .. import crud
 from ..content_types import BY_KEY, CONTENT_TYPES
 from ..db import get_db
 from ..deps import get_current_user
@@ -33,16 +34,33 @@ def _name_of(content_type: str) -> str:
     return ct.name if ct is not None else content_type
 
 
-def _url_of(content_type: str, action: str, object_id: int) -> str | None:
+def _url_of(event: ActivityEvent) -> str | None:
     """把事件拼成前端路由。
 
     **删除事件返回 None**:对象已经没了,给个链接只会让用户点出 404;
     前端看 url 是不是 None 决定渲染成链接还是纯文本。
+
+    收整个事件而不是拆三个字段:这三个字段本来就长在事件上,拆开传只是多两处能传错的地方。
     """
-    if action == "delete":
+    if event.action == crud.ACTION_DELETE:
         return None
-    ct = BY_KEY.get(content_type)
-    return f"{ct.path}/{object_id}" if ct is not None else None
+    ct = BY_KEY.get(event.content_type)
+    return f"{ct.path}/{event.object_id}" if ct is not None else None
+
+
+def _to_read(event: ActivityEvent) -> ActivityEventRead:
+    """事件行 → 响应 Schema(中文名与前端链接都由 content_types 那份清单派生)。"""
+    return ActivityEventRead(
+        id=event.id,
+        actor_name=event.actor_name,
+        action=event.action,
+        content_type=event.content_type,
+        content_type_name=_name_of(event.content_type),
+        title=event.title,
+        object_id=event.object_id,
+        url=_url_of(event),
+        created_at=event.created_at,
+    )
 
 
 @router.get("/activity", response_model=list[ActivityEventRead])
@@ -62,20 +80,7 @@ def list_activity(
         .offset(offset)
     ).all()
 
-    return [
-        ActivityEventRead(
-            id=e.id,
-            actor_name=e.actor_name,
-            action=e.action,
-            content_type=e.content_type,
-            content_type_name=_name_of(e.content_type),
-            title=e.title,
-            object_id=e.object_id,
-            url=_url_of(e.content_type, e.action, e.object_id),
-            created_at=e.created_at,
-        )
-        for e in events
-    ]
+    return [_to_read(e) for e in events]
 
 
 @router.get("/summary", response_model=list[SummaryItem])

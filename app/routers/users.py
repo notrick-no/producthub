@@ -15,7 +15,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from .. import mailer
+from .. import crud, mailer
 from ..db import get_db
 from ..deps import delete_user_sessions, now_utc, require_admin
 from ..models import User
@@ -45,6 +45,21 @@ def _is_last_active_admin(db: Session, user: User) -> bool:
     return user.role == "admin" and user.is_active and _count_active_admins(db) == 1
 
 
+def _require_mail_configured(purpose: str) -> None:
+    """邮件没配就别往下走:邀请和重置都靠邮件送达,发不出去等于这事没做成。
+
+    purpose 是「这封邮件要干嘛」,拼进错误里说清是哪种邮件发不了。
+    """
+    if not mailer.is_mail_configured():
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"邮件未配置,无法发送{purpose}:请在环境变量配置 "
+                "SMTP_HOST+SMTP_FROM,或 RESEND_API_KEY+SMTP_FROM"
+            ),
+        )
+
+
 @router.get("/users", response_model=list[UserRead])
 def list_users(db: Session = Depends(get_db)):
     """所有账号(含禁用;是否已设密在 UserRead.password_set)。"""
@@ -55,11 +70,7 @@ def list_users(db: Session = Depends(get_db)):
 @router.post("/users", response_model=UserRead, status_code=201)
 def create_user(body: UserCreate, db: Session = Depends(get_db)):
     """创建员工账号并发送邀请邮件(邮件没发成功则整体回滚,不留半截账号)。"""
-    if not mailer.is_mail_configured():
-        raise HTTPException(
-            status_code=503,
-            detail="邮件未配置,无法发送邀请:请在环境变量配置 SMTP_HOST+SMTP_FROM,或 RESEND_API_KEY+SMTP_FROM",
-        )
+    _require_mail_configured("邀请")
 
     user = User(
         email=body.email,
@@ -92,9 +103,7 @@ def create_user(body: UserCreate, db: Session = Depends(get_db)):
 @router.patch("/users/{user_id}", response_model=UserRead)
 def update_user(user_id: int, body: UserUpdate, db: Session = Depends(get_db)):
     """部分更新:本期支持 name / department / is_active。缺席的键不改。"""
-    user = db.get(User, user_id)
-    if user is None:
-        raise HTTPException(status_code=404, detail="员工不存在")
+    user = crud.get_or_404(db, User, user_id, "员工")
 
     data = body.model_dump(exclude_unset=True)
 
@@ -121,18 +130,12 @@ def update_user(user_id: int, body: UserUpdate, db: Session = Depends(get_db)):
 @router.post("/users/{user_id}/reset-password")
 def reset_password(user_id: int, db: Session = Depends(get_db)):
     """重置为随机临时密码 → 发邮件 + 强制下次登录修改 + 踢掉全部会话。"""
-    user = db.get(User, user_id)
-    if user is None:
-        raise HTTPException(status_code=404, detail="员工不存在")
+    user = crud.get_or_404(db, User, user_id, "员工")
     if _is_last_active_admin(db, user):
         raise HTTPException(
             status_code=400, detail="不能重置最后一个启用管理员的密码"
         )
-    if not mailer.is_mail_configured():
-        raise HTTPException(
-            status_code=503,
-            detail="邮件未配置,无法发送重置邮件:请在环境变量配置 SMTP_HOST+SMTP_FROM,或 RESEND_API_KEY+SMTP_FROM",
-        )
+    _require_mail_configured("重置邮件")
 
     temp = make_temp_password()
     user.password_hash = hash_password(temp)

@@ -14,13 +14,22 @@ import {
 } from 'antd'
 import { DeleteOutlined, EditOutlined } from '@ant-design/icons'
 import { deleteCategory, listCategories, listProducts, updateCategory } from '../api/resources'
-import type { Category } from '../types'
+import type { Category, Product } from '../types'
 
 interface Props {
   open: boolean
   onClose: () => void
   /** 改名 / 删除成功后通知父级,让它刷新产品分析页的分类下拉 */
   onChanged: () => void
+}
+
+/** 分类 id → 使用它的产品数。 */
+function countByCategory(products: Product[]): Map<number, number> {
+  const counts = new Map<number, number>()
+  for (const p of products) {
+    for (const c of p.categories) counts.set(c.id, (counts.get(c.id) ?? 0) + 1)
+  }
+  return counts
 }
 
 /**
@@ -49,11 +58,7 @@ export default function CategoryManageModal({ open, onClose, onChanged }: Props)
       .then(([categoryList, products]) => {
         if (cancelled) return
         setCats(categoryList)
-        const m = new Map<number, number>()
-        for (const p of products) {
-          for (const c of p.categories) m.set(c.id, (m.get(c.id) ?? 0) + 1)
-        }
-        setCounts(m)
+        setCounts(countByCategory(products))
       })
       .catch((err) => {
         if (!cancelled) message.error(err instanceof Error ? err.message : '加载分类失败')

@@ -5,7 +5,7 @@ import type { TableColumnsType } from 'antd'
 import { PlusOutlined, SettingOutlined } from '@ant-design/icons'
 import { listCategories, listProducts } from '../api/resources'
 import type { Category, Product } from '../types'
-import { STATUS_COLOR } from '../statusMeta'
+import { PRODUCT_STATUS_COLOR } from '../productMeta'
 import { formatMonthDay } from '../format'
 import { useUrlParams } from '../useUrlParams'
 import CategoryManageModal from '../components/CategoryManageModal'
@@ -117,7 +117,7 @@ export default function ProductList() {
       dataIndex: 'status',
       width: 96,
       render: (_, r) =>
-        r.status ? <Tag color={STATUS_COLOR[r.status]}>{r.status}</Tag> : null,
+        r.status ? <Tag color={PRODUCT_STATUS_COLOR[r.status]}>{r.status}</Tag> : null,
     },
     {
       title: '月活',

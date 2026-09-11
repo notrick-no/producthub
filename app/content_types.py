@@ -33,6 +33,17 @@ CONTENT_TYPES = (
 )
 
 BY_KEY = {ct.key: ct for ct in CONTENT_TYPES}
+BY_MODEL = {ct.model: ct for ct in CONTENT_TYPES}
+
+
+def content_type_of(obj) -> ContentType:
+    """按 ORM 对象查出它属于哪一类内容 —— 写事件时不用调用方再手传一遍类型。
+
+    查不到会 KeyError(500),这是故意的:某个模型没登记进 CONTENT_TYPES 却要记动态,
+    宁可直接炸,也别静默记成别的类型、或者干脆少记一条 —— 后者更难查。
+    tests/test_activity.py 覆盖了每个类型,漏登记过不了测试。
+    """
+    return BY_MODEL[type(obj)]
 
 
 def title_of(obj, content_type: ContentType) -> str:

@@ -13,9 +13,29 @@
   - monthly_visits 存原始整数,禁止负数
 """
 from datetime import date, datetime
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, field_validator
+
+
+def _blank_to_none(v):
+    """空串 / 纯空白 → None。
+
+    表单里「没填」和「清空」都长成空串,入库统一成 NULL —— 免得 '' 和 NULL 两种空
+    在筛选、去重、展示上各表现一次。
+
+    返回的是原值不是 strip 后的值:各模型都开了 str_strip_whitespace,去空白由它统一做,
+    这里只管判空,两件事不掺在一起。
+    """
+    if isinstance(v, str) and not v.strip():
+        return None
+    return v
+
+
+# 「空串 = 没填」的可空文本字段用这个类型,写法:`url: BlankToNone = None`。
+# 原来是七个模型各写一份一模一样的 field_validator(PriceTierInput 那份已经是多字段版),
+# 现在只有这一处 —— 加字段时挂上类型即可,不会再漏写。
+BlankToNone = Annotated[str | None, BeforeValidator(_blank_to_none)]
 
 # 返回给前端的 Schema 需要能直接读 ORM 对象(model_config 被子类继承)
 
@@ -28,14 +48,7 @@ class CategoryBase(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
     name: str = Field(min_length=1, max_length=100)
-    description: str | None = None
-
-    @field_validator("description", mode="before")
-    @classmethod
-    def _blank_description_to_none(cls, v):
-        if isinstance(v, str) and not v.strip():
-            return None
-        return v
+    description: BlankToNone = None
 
 
 class CategoryCreate(CategoryBase):
@@ -60,17 +73,10 @@ class PriceTierInput(BaseModel):
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
-    name: str | None = Field(default=None, max_length=100)  # 档位名,如 Pro / 团队版
+    name: BlankToNone = Field(default=None, max_length=100)  # 档位名,如 Pro / 团队版
     amount: float | None = Field(default=None, ge=0)  # 0 = 免费;空 = 面议/定制
-    cycle: str | None = Field(default=None, max_length=20)  # 月 / 年 / 一次性
-    note: str | None = None
-
-    @field_validator("name", "cycle", "note", mode="before")
-    @classmethod
-    def _blank_to_none(cls, v):
-        if isinstance(v, str) and not v.strip():
-            return None
-        return v
+    cycle: BlankToNone = Field(default=None, max_length=20)  # 月 / 年 / 一次性
+    note: BlankToNone = None
 
 
 class PriceTierRead(BaseModel):
@@ -103,28 +109,14 @@ class ProductBase(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
     name: str = Field(min_length=1, max_length=255)
-    url: str | None = Field(default=None, max_length=2048)
+    url: BlankToNone = Field(default=None, max_length=2048)
     founder: str | None = None
     monthly_visits: int | None = Field(default=None, ge=0)
     status: ProductStatus | None = None  # 产品状态
     problem: str | None = None
     user_reviews: str | None = None
     marketing_strategy: str | None = None
-    tech_analysis: str | None = None  # 产品技术分析
-
-    @field_validator("url", mode="before")
-    @classmethod
-    def _blank_url_to_none(cls, v):
-        if isinstance(v, str) and not v.strip():
-            return None
-        return v
-
-    @field_validator("tech_analysis", mode="before")
-    @classmethod
-    def _blank_tech_analysis_to_none(cls, v):
-        if isinstance(v, str) and not v.strip():
-            return None
-        return v
+    tech_analysis: BlankToNone = None  # 产品技术分析
 
 
 class ProductCreate(ProductBase):
@@ -237,7 +229,7 @@ class UserCreate(BaseModel):
 
     name: str = Field(min_length=1, max_length=255)
     email: str = Field(max_length=255)
-    department: str | None = Field(default=None, max_length=100)
+    department: BlankToNone = Field(default=None, max_length=100)
 
     @field_validator("email", mode="before")
     @classmethod
@@ -253,13 +245,6 @@ class UserCreate(BaseModel):
             raise ValueError("请输入有效邮箱")
         return v
 
-    @field_validator("department", mode="before")
-    @classmethod
-    def _blank_department_to_none(cls, v):
-        if isinstance(v, str) and not v.strip():
-            return None
-        return v
-
 
 class UserUpdate(BaseModel):
     """PATCH /api/users/{id}。缺席 = 不改;本期支持 name / department / is_active。
@@ -270,15 +255,8 @@ class UserUpdate(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
     name: str | None = Field(default=None, min_length=1, max_length=255)
-    department: str | None = Field(default=None, max_length=100)
+    department: BlankToNone = Field(default=None, max_length=100)
     is_active: bool | None = None
-
-    @field_validator("department", mode="before")
-    @classmethod
-    def _blank_department_to_none(cls, v):
-        if isinstance(v, str) and not v.strip():
-            return None
-        return v
 
 
 # ---------- 需求 / 动态(第四版)----------
@@ -308,15 +286,8 @@ class RequirementBase(BaseModel):
     status: RequirementStatus | None = None
     estimated_days: int | None = Field(default=None, ge=0)  # 预估投入天数
     due_on: date | None = None  # 预计交付日期
-    link_url: str | None = Field(default=None, max_length=2048)  # 相关资料链接
+    link_url: BlankToNone = Field(default=None, max_length=2048)  # 相关资料链接
     note: str | None = None
-
-    @field_validator("link_url", mode="before")
-    @classmethod
-    def _blank_link_to_none(cls, v):
-        if isinstance(v, str) and not v.strip():
-            return None
-        return v
 
 
 class RequirementCreate(RequirementBase):
@@ -337,6 +308,12 @@ class RequirementRead(RequirementBase):
     updated_at: datetime
 
 
+# 动态的三种动作。写事件时用 crud.ACTION_* 那三个常量,它们就取这里的取值 ——
+# 两端共用一个 Literal,不会再出现「常量改了、类型没改」这种对不上的情况。
+EVENT_ACTIONS = ("create", "update", "delete")
+EventAction = Literal["create", "update", "delete"]
+
+
 class ActivityEventRead(BaseModel):
     """首页动态流里的一条。
 
@@ -346,7 +323,7 @@ class ActivityEventRead(BaseModel):
 
     id: int
     actor_name: str
-    action: str  # create / update / delete
+    action: EventAction
     content_type: str
     content_type_name: str  # 中文名,如「产品」
     title: str

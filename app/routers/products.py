@@ -121,6 +121,21 @@ def _require_categories_exist(db: Session, ids: list[int]) -> list[int]:
     return unique
 
 
+def _set_category_links(db: Session, product: Product, category_ids: list[int]) -> None:
+    """把产品的分类标签设成这一组(多的删、少的加)。
+
+    先清空旧关联(delete-orphan 会删掉旧行)再打新标,中间 flush 一次,
+    免得新旧行撞复合主键。新建时旧关联本来就是空的,走的是同一段代码。
+    """
+    ids = _require_categories_exist(db, category_ids)
+    product.category_links.clear()
+    db.flush()
+    for category_id in ids:
+        product.category_links.append(
+            ProductCategory(product_id=product.id, category_id=category_id)
+        )
+
+
 @router.get("/products", response_model=list[ProductRead])
 def list_products(
     category_id: int | None = None, db: Session = Depends(get_db)
@@ -141,12 +156,20 @@ def list_products(
     return [_to_read(p) for p in products]
 
 
-def _add_price_tiers(db: Session, product_id: int, tiers: list[PriceTierInput]) -> None:
-    """把一批定价档位落库(用于新建)。"""
+def _set_price_tiers(
+    db: Session, product: Product, tiers: list[PriceTierInput]
+) -> None:
+    """把定价档位设成这一组(整组替换)。
+
+    与分类同款:先清空再追加,中间 flush 一次免得新旧行撞主键。
+    新建时旧档位本来就是空的,走的是同一段代码。
+    """
+    product.price_tiers.clear()
+    db.flush()
     for t in tiers:
-        db.add(
+        product.price_tiers.append(
             ProductPriceTier(
-                product_id=product_id,
+                product_id=product.id,
                 name=t.name,
                 amount=t.amount,
                 cycle=t.cycle,
@@ -161,17 +184,15 @@ def create_product(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    category_ids = _require_categories_exist(db, body.category_ids)
-
     product = Product(**{field: getattr(body, field) for field in _SCALAR_FIELDS})
     db.add(product)
     db.flush()  # 先拿到 product.id
 
-    for category_id in category_ids:
-        db.add(ProductCategory(product_id=product.id, category_id=category_id))
-    _add_price_tiers(db, product.id, body.price_tiers)
+    # 与 PATCH 走同一段代码:新建时旧关联是空的,「设成这一组」就等于「打这几个标」
+    _set_category_links(db, product, body.category_ids)
+    _set_price_tiers(db, product, body.price_tiers)
 
-    crud.record_event(db, user, crud.ACTION_CREATE, "product", product)
+    crud.record_event(db, user, crud.ACTION_CREATE, product)
     db.commit()
     return _to_read(_load_product(db, product.id))
 
@@ -192,35 +213,16 @@ def update_product(
 
     payload = body.model_dump(exclude_unset=True)
 
-    # 分类单独处理,不进 setattr
+    # 两个子集合各自整组替换,不进 setattr。
+    # 「键在不在」看 payload(PATCH 三态靠它),取值用 body 上的模型对象,省得再拆字典。
     if "category_ids" in payload:
-        category_ids = _require_categories_exist(db, payload["category_ids"] or [])
-        # 先清空旧关联(delete-orphan 会删掉旧行),再打新标,避免主键冲突
-        product.category_links.clear()
-        db.flush()
-        for category_id in category_ids:
-            product.category_links.append(
-                ProductCategory(product_id=product.id, category_id=category_id)
-            )
-
-    # 分级定价:同款三态(缺席 = 不动;[] = 清空;数组 = 整组替换)
+        _set_category_links(db, product, body.category_ids or [])
     if "price_tiers" in payload:
-        product.price_tiers.clear()
-        db.flush()
-        for t in payload["price_tiers"] or []:
-            product.price_tiers.append(
-                ProductPriceTier(
-                    product_id=product.id,
-                    name=t.get("name"),
-                    amount=t.get("amount"),
-                    cycle=t.get("cycle"),
-                    note=t.get("note"),
-                )
-            )
+        _set_price_tiers(db, product, body.price_tiers or [])
 
     # 标量字段走白名单(category_ids / price_tiers 上面已单独处理)
     crud.apply_patch(product, payload, _SCALAR_FIELDS)
-    crud.record_event(db, user, crud.ACTION_UPDATE, "product", product)
+    crud.record_event(db, user, crud.ACTION_UPDATE, product)
 
     db.commit()
     return _to_read(_load_product(db, product.id))
@@ -234,7 +236,7 @@ def delete_product(
 ):
     product = crud.get_or_404(db, Product, product_id, "产品")
     # 先记动态再删:提交之后就读不到它的标题了
-    crud.record_event(db, user, crud.ACTION_DELETE, "product", product)
+    crud.record_event(db, user, crud.ACTION_DELETE, product)
     db.delete(product)
     db.commit()
 

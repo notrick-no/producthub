@@ -12,13 +12,15 @@ from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from .content_types import BY_KEY, title_of
+from .content_types import content_type_of, title_of
 from .models import ActivityEvent, User
+from .schemas import EventAction
 
-# 动作取值,存进 activity_events.action
-ACTION_CREATE = "create"
-ACTION_UPDATE = "update"
-ACTION_DELETE = "delete"
+# 动作取值,存进 activity_events.action;类型取自 schemas(那是接口契约的出处),
+# 这里只是给写端点的代码三个好念的名字。
+ACTION_CREATE: EventAction = "create"
+ACTION_UPDATE: EventAction = "update"
+ACTION_DELETE: EventAction = "delete"
 
 
 def get_or_404(db: Session, model, obj_id: int, label: str):
@@ -53,18 +55,16 @@ def commit_or_409(db: Session, detail: str) -> None:
         raise HTTPException(status_code=409, detail=detail)
 
 
-def record_event(
-    db: Session, actor: User | None, action: str, content_type: str, obj
-) -> None:
+def record_event(db: Session, actor: User | None, action: str, obj) -> None:
     """记一条动态,**不提交**(跟着调用方的事务一起走)。
 
     必须在 commit 之前调用:删除场景下对象随事务消失,提交后再读它的字段就取不到了。
     标题存**快照** —— 对象以后会被删,动态流不能因此变成空白。
 
-    content_type 拼错会在这里 KeyError(500),这是故意的:静默少一条动态更难查。
-    tests/test_activity.py 覆盖了每个类型,拼错过不了测试。
+    内容类型由 obj 自己推出来(Product → product),不用调用方再传一遍:
+    两个东西就有对不上的一天,而对不上不会报错,只会记成别的类型。
     """
-    ct = BY_KEY[content_type]
+    ct = content_type_of(obj)
     db.add(
         ActivityEvent(
             actor_id=actor.id if actor is not None else None,

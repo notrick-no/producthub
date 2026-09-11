@@ -62,6 +62,11 @@ def _send(to_email: str, subject: str, html_body: str) -> None:
     if os.getenv("RESEND_API_KEY"):
         _send_resend_api(to_email, subject, html_body)
         return
+    _send_smtp(to_email, subject, html_body)
+
+
+def _send_smtp(to_email: str, subject: str, html_body: str) -> None:
+    """smtplib 发信:465 走 SMTPS 隐式 TLS,587 等普通端口默认 STARTTLS。"""
     host = os.getenv("SMTP_HOST", "")
     port = int(os.getenv("SMTP_PORT", "587"))
     username = os.getenv("SMTP_USERNAME")

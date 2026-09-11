@@ -44,7 +44,7 @@ def create_requirement(
     requirement = Requirement(**body.model_dump())
     db.add(requirement)
     db.flush()  # 先拿到 requirement.id,记动态要用
-    crud.record_event(db, user, crud.ACTION_CREATE, "requirement", requirement)
+    crud.record_event(db, user, crud.ACTION_CREATE, requirement)
     db.commit()
     db.refresh(requirement)
     return requirement
@@ -66,7 +66,7 @@ def update_requirement(
 
     # 需求整表字段都可改,不需要白名单(缺席即不改由 exclude_unset 保证)
     crud.apply_patch(requirement, body.model_dump(exclude_unset=True))
-    crud.record_event(db, user, crud.ACTION_UPDATE, "requirement", requirement)
+    crud.record_event(db, user, crud.ACTION_UPDATE, requirement)
 
     db.commit()
     db.refresh(requirement)
@@ -81,6 +81,6 @@ def delete_requirement(
 ):
     requirement = crud.get_or_404(db, Requirement, requirement_id, "需求")
     # 先记动态再删:提交之后就读不到它的标题了
-    crud.record_event(db, user, crud.ACTION_DELETE, "requirement", requirement)
+    crud.record_event(db, user, crud.ACTION_DELETE, requirement)
     db.delete(requirement)
     db.commit()
