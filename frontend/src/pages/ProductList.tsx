@@ -2,10 +2,11 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { App as AntApp, Button, Input, Select, Space, Table, Tag, Typography } from 'antd'
 import type { TableColumnsType } from 'antd'
-import { PlusOutlined, SettingOutlined } from '@ant-design/icons'
+import { GlobalOutlined, PlusOutlined, SettingOutlined } from '@ant-design/icons'
 import { listCategories, listProducts } from '../api/resources'
 import type { Category, Product } from '../types'
 import { PRODUCT_STATUS_COLOR } from '../productMeta'
+import { externalHref } from '../externalLink'
 import { formatMonthDay } from '../format'
 import { useUrlParams } from '../useUrlParams'
 import CategoryManageModal from '../components/CategoryManageModal'
@@ -86,17 +87,29 @@ export default function ProductList() {
       title: '名称',
       dataIndex: 'name',
       render: (_, r) => (
-        <Space direction="vertical" size={0}>
-          <Link to={`/products/${r.id}`}>
-            <Typography.Text strong>{r.name}</Typography.Text>
-          </Link>
-          {r.url && (
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              {r.url}
-            </Typography.Text>
-          )}
-        </Space>
+        <Link to={`/products/${r.id}`} onClick={(e) => e.stopPropagation()}>
+          <Typography.Text strong>{r.name}</Typography.Text>
+        </Link>
       ),
+    },
+    {
+      title: '域名',
+      dataIndex: 'url',
+      // 单独一列而不是跟在名称底下:它是个能点出去的外链,和「进详情」是两件事,
+      // 混在同一个单元格里容易点错。宽度给够但仍会截断,长网址不撑破表格。
+      width: 220,
+      ellipsis: true,
+      render: (_, r) =>
+        r.url ? (
+          <Typography.Link
+            href={externalHref(r.url)}
+            target="_blank"
+            // 不让它冒泡:点域名是去网站,不是进详情页
+            onClick={(e) => e.stopPropagation()}
+          >
+            <GlobalOutlined /> {r.url}
+          </Typography.Link>
+        ) : null,
     },
     {
       title: '分类',
@@ -166,6 +179,8 @@ export default function ProductList() {
         </Button>
       </ListToolbar>
 
+      {/* 整行可点:点空白处也能进详情,不用非得瞄准产品名。行内自带动作的元素
+          (域名外链)各自 stopPropagation,不会连带跳进详情页。 */}
       <Table<Product>
         rowKey="id"
         columns={columns}
@@ -173,7 +188,15 @@ export default function ProductList() {
         loading={loading}
         pagination={{ pageSize: 20, showTotal: (t) => `共 ${t} 条` }}
         locale={{ emptyText: q ? '没有匹配的产品' : '还没有产品,点「新建记录」开始研究' }}
-        scroll={{ x: 720 }}
+        scroll={{ x: 940 }}
+        onRow={(r) => ({
+          style: { cursor: 'pointer' },
+          onClick: () => {
+            // 拖选一段文字时不该跳转 —— 否则选中想复制的内容,手一松页面就被带走了
+            if (window.getSelection()?.toString()) return
+            navigate(`/products/${r.id}`)
+          },
+        })}
       />
 
       <CategoryManageModal

@@ -25,6 +25,7 @@ import {
   REQUIREMENT_STATUS_COLOR,
   SOURCE_COLOR,
 } from '../requirementMeta'
+import { externalHref } from '../externalLink'
 import { formatDate } from '../format'
 
 /** 需求详情页:标题 + 标签 + 详情长文 + 其余字段。 */
@@ -125,7 +126,7 @@ export default function RequirementDetail() {
           </Space>
 
           {requirement.link_url && (
-            <Typography.Link href={requirement.link_url} target="_blank">
+            <Typography.Link href={externalHref(requirement.link_url)} target="_blank">
               <LinkOutlined /> {requirement.link_url}
             </Typography.Link>
           )}
