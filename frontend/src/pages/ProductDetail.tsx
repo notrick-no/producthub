@@ -14,6 +14,7 @@ import { ArrowLeftOutlined, DeleteOutlined, EditOutlined, GlobalOutlined } from 
 import { deleteProduct, getProduct } from '../api/resources'
 import type { PriceTier, Product } from '../types'
 import { PRODUCT_STATUS_COLOR } from '../productMeta'
+import { externalHref } from '../externalLink'
 import { formatDate } from '../format'
 import ProductImagesCard from '../components/ProductImagesCard'
 
@@ -104,7 +105,7 @@ export default function ProductDetail() {
                 {product.name}
               </Typography.Title>
               {product.url && (
-                <Typography.Link href={product.url} target="_blank">
+                <Typography.Link href={externalHref(product.url)} target="_blank">
                   <GlobalOutlined /> {product.url}
                 </Typography.Link>
               )}

@@ -62,8 +62,9 @@ export default function RequirementList() {
     {
       title: '需求描述',
       dataIndex: 'description',
+      // stopPropagation:否则 ctrl/⌘+点这里想新开标签页时,当前页也会被行点击带走
       render: (_, r) => (
-        <Link to={`/requirements/${r.id}`}>
+        <Link to={`/requirements/${r.id}`} onClick={(e) => e.stopPropagation()}>
           <Typography.Text strong>{r.description}</Typography.Text>
         </Link>
       ),
@@ -131,6 +132,7 @@ export default function RequirementList() {
         />
       </ListToolbar>
 
+      {/* 整行可点:点空白处也能进详情,不用非得瞄准需求描述。 */}
       <Table<Requirement>
         rowKey="id"
         columns={columns}
@@ -139,6 +141,14 @@ export default function RequirementList() {
         pagination={{ pageSize: 20, showTotal: (t) => `共 ${t} 条` }}
         locale={{ emptyText: q ? '没有匹配的需求' : '还没有需求,点「新建需求」开始记录' }}
         scroll={{ x: 790 }}
+        onRow={(r) => ({
+          style: { cursor: 'pointer' },
+          onClick: () => {
+            // 拖选一段文字时不该跳转 —— 否则选中想复制的内容,手一松页面就被带走了
+            if (window.getSelection()?.toString()) return
+            navigate(`/requirements/${r.id}`)
+          },
+        })}
       />
     </>
   )
