@@ -65,11 +65,14 @@ export default function HomePage() {
       <Typography.Title level={4} style={{ marginTop: 24 }}>
         最近动态
       </Typography.Title>
+      {/* 左右 24px 内边距不能省:antd 的 List 默认只在 item 上给纵向 padding
+          (`.ant-list-item { padding: 12px 0 }`),横向是 0 —— 不补的话文字会
+          贴着白块的圆角边,和上面理念条(自带 `padding: 20px 24px`)也对不齐。 */}
       <List
         loading={loading}
         dataSource={events}
         locale={{ emptyText: '还没有动态。新建一条产品记录或需求,就会出现在这里' }}
-        style={{ background: '#fff', borderRadius: 8 }}
+        style={{ background: '#fff', borderRadius: 8, padding: '4px 24px' }}
         renderItem={(e) => {
           const line = (
             <Space size={8} wrap>

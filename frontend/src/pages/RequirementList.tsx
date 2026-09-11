@@ -94,7 +94,10 @@ export default function RequirementList() {
     {
       title: '预计交付',
       dataIndex: 'due_on',
-      width: 110,
+      // 比「更新时间」宽:这里显示完整的 2026-09-11(交付日期跨年,年份省不掉),
+      // 而更新时间走 formatMonthDay 只有 9/11。110px 减去左右各 16px 的内边距
+      // 只剩 78px,刚好卡在换行临界点上。
+      width: 140,
       render: (_, r) => r.due_on ?? '—',
     },
     {
@@ -135,7 +138,7 @@ export default function RequirementList() {
         loading={loading}
         pagination={{ pageSize: 20, showTotal: (t) => `共 ${t} 条` }}
         locale={{ emptyText: q ? '没有匹配的需求' : '还没有需求,点「新建需求」开始记录' }}
-        scroll={{ x: 760 }}
+        scroll={{ x: 790 }}
       />
     </>
   )
