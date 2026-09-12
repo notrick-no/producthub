@@ -22,7 +22,7 @@ import {
 } from '../api/resources'
 import type { User, UserPayload } from '../types'
 import { useAuth } from '../auth/AuthContext'
-import { formatFullDate } from '../format'
+import { formatDate, formatFullDate } from '../format'
 
 /** 管理员账号管理:列表 + 新建(邀请邮件)+ 启停 + 重置密码。 */
 export default function AccountsPage() {
@@ -128,6 +128,28 @@ export default function AccountsPage() {
         set ? <Typography.Text type="secondary">已设置</Typography.Text> : <Tag color="orange">待邀请</Tag>,
     },
     {
+      // 审计:最后一次**成功**登录。登录失败的尝试也记在库里,但不进这一列 ——
+      // 这里要回答的是「最后登录」,不是「最后动过登录框」。
+      title: '最后登录',
+      dataIndex: 'last_login_at',
+      width: 170,
+      render: (_, u) =>
+        u.last_login_at ? (
+          <Space direction="vertical" size={0}>
+            <Typography.Text style={{ fontSize: 13 }}>
+              {formatDate(u.last_login_at)}
+            </Typography.Text>
+            {u.last_login_ip && (
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                {u.last_login_ip}
+              </Typography.Text>
+            )}
+          </Space>
+        ) : (
+          <Typography.Text type="secondary">从未登录</Typography.Text>
+        ),
+    },
+    {
       title: '创建时间',
       dataIndex: 'created_at',
       width: 110,
@@ -217,7 +239,7 @@ export default function AccountsPage() {
         dataSource={users}
         loading={loading}
         pagination={{ pageSize: 20, showTotal: (t) => `共 ${t} 个账号` }}
-        scroll={{ x: 900 }}
+        scroll={{ x: 1070 }}
       />
 
       <Modal

@@ -22,6 +22,7 @@ from ..deps import (
     read_session_user,
     set_session_cookie,
 )
+from ..login_audit import prune_old, record_login
 from ..models import AuthSession
 from ..models import User
 from ..schemas import (
@@ -37,14 +38,37 @@ router = APIRouter(prefix="/api", tags=["auth"])
 
 
 @router.post("/auth/login", response_model=UserRead)
-def login(body: LoginRequest, response: Response, db: Session = Depends(get_db)):
+def login(
+    body: LoginRequest,
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+):
+    """登录。三条路径**都**写审计,成功与失败都记。
+
+    ⚠️ 失败路径上的 `db.commit()` 不是多余的:get_db(app/db.py)只负责 close(),
+    **既不 commit 也不 rollback**。所以「add 一条失败记录然后 raise 401」的结果是
+    这条记录被静默丢弃 —— 表里只剩成功记录,而且没有任何地方会报错。
+    审计要回答的往往正是「谁在试」,这部分丢了就等于没做审计。
+    """
     email = body.email.strip().lower()
     user = db.scalars(select(User).where(User.email == email)).first()
     # 未设过密码(邀请待完成)的账号也走统一报错,不暴露其状态
     if user is None or not verify_password(body.password, user.password_hash):
+        # user_id 能填就填:对外的报错是统一的(不暴露账号是否存在),但审计记录是
+        # 管理员才看得到的数据 —— 「有人在拿这个邮箱试密码」正是要看出的事情。
+        record_login(
+            db, request, email=email, user_id=user.id if user else None, succeeded=False
+        )
+        db.commit()
         raise HTTPException(status_code=401, detail="邮箱或密码不正确")
     if not user.is_active:
+        record_login(db, request, email=email, user_id=user.id, succeeded=False)
+        db.commit()
         raise HTTPException(status_code=401, detail="账号已被禁用,请联系管理员")
+    record_login(db, request, email=email, user_id=user.id, succeeded=True)
+    # 顺手清一次过期记录:这张表只追加,而写入点是公开且无限流的端点
+    prune_old(db)
     purge_expired_sessions(db, user.id)
     raw = add_session(db, user)
     db.commit()

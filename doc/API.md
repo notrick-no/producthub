@@ -52,6 +52,8 @@ REST 风格,统一前缀 `/api`,请求/响应均为 JSON,字段 snake_case。字
   "is_active": true,
   "must_change_password": false,
   "password_set": true,
+  "last_login_at": "2026-09-12T09:31:00+08:00",
+  "last_login_ip": "203.0.113.7",
   "created_at": "2026-09-10T18:00:00+08:00",
   "updated_at": "2026-09-10T18:00:00+08:00"
 }
@@ -60,10 +62,15 @@ REST 风格,统一前缀 `/api`,请求/响应均为 JSON,字段 snake_case。字
 `role ∈ {admin, employee}`;`password_set` 由后端派生(哈希非空 = 已设过密码);受邀未设密的员工
 该字段为 `false`。
 
+`last_login_at` / `last_login_ip` = **最后一次成功登录**的时间与来源 IP(第五版审计)。
+只有 `GET /api/users` 会填这两个字段,其它返回 `User` 的端点不查它,值为 `null`。
+
 ### POST /api/auth/login
 - 请求体:`{"email": "...", "password": "..."}`。邮箱大小写不敏感(服务端统一存小写)。
 - → `200` 返回 `User`,并 `Set-Cookie: producthub_session`(30 天)。
 - `401` 邮箱或密码不正确 / 账号已被禁用。
+- **每次尝试都写一条审计记录**(成功与失败都写,失败也留 IP 与 User-Agent),
+  保留 180 天,在成功登录时顺手清理。
 
 ### POST /api/auth/logout
 - → `204`,删除当前会话并清 cookie(会话已失效也返回 204)。
@@ -91,6 +98,8 @@ REST 风格,统一前缀 `/api`,请求/响应均为 JSON,字段 snake_case。字
 
 ### GET /api/users
 - 全部账号(含禁用、含受邀未设密的),按 id 升序 → `200` `User[]`。
+- 每条带出 `last_login_at` / `last_login_ip`(**最后一次成功登录**;从未登录为 `null`)。
+  账号页据此显示「最后登录」列。
 
 ### POST /api/users(创建 + 邀请)
 - 请求体:`{"name": "...", "email": "...", "department": "可选"}`,`name` ≤255 必填,`email` ≤255。

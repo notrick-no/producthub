@@ -229,6 +229,37 @@ class AuthSession(Base):
     user: Mapped[User] = relationship(back_populates="sessions")
 
 
+class LoginEvent(Base):
+    """一次登录尝试的审计记录(第五版)。
+
+    **成功与失败都记** —— 审计要回答的往往正是「谁在试」,只留成功记录答不了。
+
+    `email` 存的是**快照**:失败时可能压根没有这个账号(FK 只能置空),而账号被删之后
+    也得看得出当时是谁在登。
+
+    `user_id` 是 SET NULL 而非 CASCADE:账号没了,审计记录不能跟着消失。
+    这个取舍与 activity_events.actor_id 一致。表只追加,唯一的删除是保留期清理
+    (见 app/login_audit.py)。
+
+    不声明与 User 的 relationship(照 activity_events 的先例):这里不需要从账号反查
+    它的登录记录,少一个关系就少一处能配错级联的地方。
+    """
+
+    __tablename__ = "login_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    email: Mapped[str] = mapped_column(String(255))  # 本次填的邮箱(小写)
+    ip: Mapped[str | None] = mapped_column(String(45))  # 45 = IPv6 字面量上限
+    user_agent: Mapped[str | None] = mapped_column(String(255))  # 超长在写入前截断
+    succeeded: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+
+
 class Requirement(Base):
     """一条需求记录(第四版)。
 

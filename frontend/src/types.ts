@@ -17,6 +17,10 @@ export interface User {
   must_change_password: boolean
   /** 是否已设过密码(邀请未完成 = false) */
   password_set: boolean
+  /** 最后一次**成功**登录(第五版审计);没登录过为 null */
+  last_login_at?: string | null
+  /** 那次登录的来源 IP;取不到为 null */
+  last_login_ip?: string | null
   created_at: string
   updated_at: string
 }

@@ -202,12 +202,16 @@ class UserRead(BaseModel):
     is_active: bool
     must_change_password: bool
     password_set: bool  # 是否已设过密码(派生:哈希非空)
+    # 最后一次**成功**登录(第五版,来自 login_events)。只在账号列表里带出来,
+    # /auth/me 等处没有这个查询,留 None —— 所以是可选而非必填。
+    last_login_at: datetime | None = None
+    last_login_ip: str | None = None
     created_at: datetime
     updated_at: datetime
 
 
-def user_read_from_model(user) -> UserRead:
-    """ORM User → UserRead(补派生字段 password_set)。"""
+def user_read_from_model(user, last_login=None) -> UserRead:
+    """ORM User → UserRead(补派生字段 password_set;可选带最近一次成功登录)。"""
     return UserRead(
         id=user.id,
         email=user.email,
@@ -217,6 +221,8 @@ def user_read_from_model(user) -> UserRead:
         is_active=user.is_active,
         must_change_password=user.must_change_password,
         password_set=bool(user.password_hash),
+        last_login_at=last_login.created_at if last_login else None,
+        last_login_ip=last_login.ip if last_login else None,
         created_at=user.created_at,
         updated_at=user.updated_at,
     )
