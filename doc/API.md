@@ -358,6 +358,66 @@ REST 风格,统一前缀 `/api`,请求/响应均为 JSON,字段 snake_case。字
 
 ---
 
+## Comments 评论与点赞(第五版)
+
+产品、需求(以后的博客)共用这一套。`target_type` 的合法取值来自后端
+`app/content_types.py` 的 `BY_KEY` —— 传了没登记的类型是 `404`。
+
+**评论形状**(下称 `Comment`):
+
+```json
+{
+  "id": 3,
+  "target_type": "product",
+  "target_id": 7,
+  "author_id": 2,
+  "author_name": "张三",
+  "body": "这个定价策略值得再挖一层",
+  "parent_id": null,
+  "deleted_at": null,
+  "like_count": 2,
+  "liked_by_me": true,
+  "replies": [],
+  "created_at": "2026-09-12T10:20:00+08:00"
+}
+```
+
+- `author_name` 是**当前**姓名(后端按 `author_id` join 出来的)。账号被删之后
+  `author_id` 变 `null`,这时回落到写入时记下的那个名字。
+- `deleted_at` 非空 = **墓碑**:`body` 已是空串,前端渲染成「该评论已删除」。
+- `replies` 里放的是同一形状的回复,但**回复的 `replies` 恒为空数组**(只有一层)。
+
+### GET /api/comments?target_type=&target_id=
+
+- → `200` `Comment[]`,**只含顶层评论**,回复嵌在各自的 `replies` 里。
+- 顶层按 `created_at` 正序。`limit`(默认 200,1–500)限制的是**顶层条数**,
+  回复跟着父评论一起返回。
+- `404` 内容类型不存在 / 评论对象不存在(草稿博客也走这里,见第五版 5C)。
+
+### POST /api/comments
+
+- 请求体:`{"target_type": "...", "target_id": 1, "body": "...", "parent_id": null}`。
+  `body` 1–5000 字(去空白后不能为空)。
+- → `201` `Comment`。带 `parent_id` 就是回复。
+- `404` 目标不存在;`422` 父评论不存在 / 父评论不在同一个对象上 / **父评论是回复**
+  (只允许一层)/ 父评论已被删除。
+
+### DELETE /api/comments/{id}
+
+- 作者本人或管理员 → `204`;否则 `403`。删除是**幂等**的。
+- **不是硬删**:正文清空、`deleted_at` 打点,行留着 —— 硬删一条顶层评论会连带删掉
+  **别人写的**回复。回复本身照常显示。
+
+### POST / DELETE /api/comments/{id}/like
+
+- 点赞 / 取消点赞,都是 `204`,都**幂等**(重复点不报错、不重复计数)。
+- `404` 评论不存在;`422` 评论已删除(墓碑不能被赞)。
+
+**评论不记首页动态,也不登记为内容类型** —— 照「分类不记」的先例:评论是附着在内容上的
+互动,记了会把动态冲成流水账。
+
+---
+
 ## 前端接口对照
 
 `frontend/src/api/resources.ts` 与上面一一对应,统一走 `client.ts`(自动处理错误与 204)。

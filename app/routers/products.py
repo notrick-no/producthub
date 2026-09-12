@@ -235,10 +235,19 @@ def delete_product(
     db: Session = Depends(get_db),
 ):
     product = crud.get_or_404(db, Product, product_id, "产品")
+    # 先把文件名取出来(顺带校验路径):提交之后才发现路径异常的话,记录已经没了,
+    # 却只能回一个 500
+    image_names = [_disk_path(i.path) for i in product.images]
     # 先记动态再删:提交之后就读不到它的标题了
     crud.record_event(db, user, crud.ACTION_DELETE, product)
+    # comments 上没有指向产品的 FK,多态指针的账单在这里手动结(见 crud.delete_comments_for)
+    crud.delete_comments_for(db, product)
     db.delete(product)
     db.commit()
+    # 提交成功之后才删磁盘文件(照 delete_image 的次序):反过来一旦回滚,
+    # 就变成「图没了、记录还在」
+    for name in image_names:
+        (UPLOAD_DIR / name).unlink(missing_ok=True)
 
 
 def _get_image(db: Session, product_id: int, image_id: int) -> ProductImage:

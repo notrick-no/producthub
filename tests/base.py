@@ -188,3 +188,27 @@ class ApiTestCase(unittest.TestCase):
         )
         self.assertEqual(r.status_code, 201, r.text)
         return r.json()
+
+    def new_comment(
+        self,
+        target_type: str,
+        target_id: int,
+        body: str = "示例评论",
+        client: TestClient | None = None,
+        **fields,
+    ) -> dict:
+        """POST 发一条评论(默认以 self.client 的身份),断言 201 后返回响应 JSON。
+
+        client 传另一个已登录客户端 = 以别人的身份发,用于「删别人的评论」这类用例。
+        """
+        r = (client or self.client).post(
+            "/api/comments",
+            json={
+                "target_type": target_type,
+                "target_id": target_id,
+                "body": body,
+                **fields,
+            },
+        )
+        self.assertEqual(r.status_code, 201, r.text)
+        return r.json()

@@ -18,6 +18,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
@@ -257,6 +258,79 @@ class LoginEvent(Base):
     succeeded: Mapped[bool] = mapped_column(Boolean, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), index=True
+    )
+
+
+class Comment(Base):
+    """一条评论(第五版):产品 / 需求 / 以后的博客共用这一张表。
+
+    `target_type` + `target_id` 是**多态外键** —— 没有 FK 约束,所以数据库不知道
+    「这条评论挂在哪个产品上」,也就**不会**在删产品时自动带走它的评论。清理由各资源的
+    删除端点显式调 `crud.delete_comments_for(...)` 负责。这是这套设计的主要代价。
+
+    层级**只有一层**:顶层评论 `parent_id` 为空,回复指向一条顶层评论;回复不能再被回复。
+    校验在 routers/comments.py,不靠数据库约束。
+
+    `deleted_at` 非空 = **墓碑**:`body` 已清空,但这一行还在,所以它下面的回复不会消失。
+    硬删一条顶层评论会连带删掉**别人写的**回复 —— 一个人能抹掉一整段自己没参与的讨论。
+
+    `author_name` 只在 `author_id` 为空时兜底署名。与 activity_events 的 actor_name 不同:
+    那边存快照是因为它是**某时刻的历史记录**(「张三 3 月删了《X》」就该一直写张三);
+    评论是**活的内容**,用户改名后应当跟着改 —— 两处都存等于给同一个事实留两个出处。
+    所以展示时按 author_id join 出当前姓名,取不到了才用这一列。
+    """
+
+    __tablename__ = "comments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    target_type: Mapped[str] = mapped_column(String(20))  # content_types.BY_KEY 的 key
+    target_id: Mapped[int] = mapped_column(Integer)  # 多态:没有 FK,见类注释
+    author_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    author_name: Mapped[str] = mapped_column(String(255))  # 仅 author_id 为空时兜底
+    body: Mapped[str] = mapped_column(Text, nullable=False)  # 墓碑时清成 ""
+    parent_id: Mapped[int | None] = mapped_column(
+        ForeignKey("comments.id", ondelete="CASCADE"), index=True
+    )
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    # 读一个对象的整串评论:定 target 之后按时间正序,一条索引走完
+    __table_args__ = (
+        Index("ix_comments_target", "target_type", "target_id", "created_at"),
+    )
+
+    # 不声明 replies / likes 关系,这是**有意的**:两个子表的外键都是 ON DELETE CASCADE,
+    # 而 SQLAlchemy 只在自己管着关系时才去替数据库操心 —— 一旦声明了关系却没加
+    # passive_deletes=True,删父行的前一步会先发 UPDATE 把子行「摘」下来:
+    # 回复会被改成顶层评论浮上来,而 comment_likes.comment_id 是 NOT NULL,直接
+    # IntegrityError 500。这一版不需要从评论反查它的回复或点赞,少一个关系就少一处能写错。
+
+
+class CommentLike(Base):
+    """评论点赞(第五版)。
+
+    照 product_categories 的**关联对象**写法:复合主键 (comment_id, user_id),
+    天然保证「一人对一条只能赞一次」,不用额外的唯一约束。
+    删评论 / 删账号都靠外键 CASCADE 带走。
+    """
+
+    __tablename__ = "comment_likes"
+
+    comment_id: Mapped[int] = mapped_column(
+        ForeignKey("comments.id", ondelete="CASCADE"), primary_key=True
+    )
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
     )
 
 

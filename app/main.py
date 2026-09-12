@@ -23,7 +23,15 @@ from contextlib import asynccontextmanager
 
 from app.bootstrap import ensure_bootstrap_admin
 from app.db import SessionLocal
-from app.routers import auth, categories, home, products, requirements, users
+from app.routers import (
+    auth,
+    categories,
+    comments,
+    home,
+    products,
+    requirements,
+    users,
+)
 from app.static_assets import FRONTEND_DIST, SpaStaticFiles
 from app.storage import UPLOAD_DIR
 
@@ -43,6 +51,7 @@ app.include_router(categories.router)
 app.include_router(products.router)
 app.include_router(requirements.router)
 app.include_router(users.router)
+app.include_router(comments.router)  # 评论 / 点赞(第五版)
 app.include_router(home.router)  # 首页动态 / 汇总(第四版)
 
 

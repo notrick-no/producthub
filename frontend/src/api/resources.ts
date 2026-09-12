@@ -5,6 +5,8 @@ import type {
   ActivityEvent,
   Category,
   CategoryPayload,
+  Comment,
+  CommentPayload,
   LoginPayload,
   Product,
   ProductImage,
@@ -144,4 +146,32 @@ export function listActivity(limit = 20, offset = 0): Promise<ActivityEvent[]> {
 /** 汇总条数按内容类型返回,前端直接渲染,不写死有哪几种。 */
 export function fetchSummary(): Promise<SummaryItem[]> {
   return get<SummaryItem[]>('/summary')
+}
+
+// ---------- Comments 评论 / 点赞(第五版)----------
+// 这组**不进 crud<T>() 工厂**:列表带 query 参数、点赞是 /like 子路径、
+// 删除是 204 无响应体,形状都对不上那个工厂的五个标准端点。
+// 照 product images 那几条的先例单独写。
+
+/** 某个对象的评论树:顶层按时间正序,回复嵌在各自的顶层评论里。 */
+export function listComments(targetType: string, targetId: number): Promise<Comment[]> {
+  return get<Comment[]>(`/comments?target_type=${targetType}&target_id=${targetId}`)
+}
+
+export function createComment(payload: CommentPayload): Promise<Comment> {
+  return post<Comment>('/comments', payload)
+}
+
+/** 删除是**墓碑**:正文清空、回复保留。作者本人或管理员。 */
+export function deleteComment(id: number): Promise<void> {
+  return del(`/comments/${id}`)
+}
+
+/** 点赞 / 取消点赞都是幂等的。 */
+export function likeComment(id: number): Promise<void> {
+  return post<void>(`/comments/${id}/like`, {})
+}
+
+export function unlikeComment(id: number): Promise<void> {
+  return del(`/comments/${id}/like`)
 }

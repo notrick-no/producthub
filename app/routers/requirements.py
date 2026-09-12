@@ -82,5 +82,7 @@ def delete_requirement(
     requirement = crud.get_or_404(db, Requirement, requirement_id, "需求")
     # 先记动态再删:提交之后就读不到它的标题了
     crud.record_event(db, user, crud.ACTION_DELETE, requirement)
+    # comments 上没有指向需求的 FK,多态指针的账单在这里手动结(见 crud.delete_comments_for)
+    crud.delete_comments_for(db, requirement)
     db.delete(requirement)
     db.commit()
