@@ -37,11 +37,21 @@ router = APIRouter(
 
 
 def _require_target(db: Session, target_type: str, target_id: int) -> None:
-    """校验评论对象存在 —— comments 上没有 FK,数据库不会替我们挡。"""
+    """校验评论对象存在 —— comments 上没有 FK,数据库不会替我们挡。
+
+    **没发布的东西按不存在处理**:草稿博客在表里是有一行的,不挡的话
+    `target_type=blog&target_id=<猜>` 就能问出「有这么一篇」,还能在草稿底下评论,
+    而 `/blog/{id}` 那边是规规矩矩 404 的 —— 同一份内容两个端点两种说法。
+    所有人一视同仁(作者本人也评论不了自己的草稿):留个例外就得在这里拿 me,
+    而草稿本来就没打算给人看。
+    """
     ct = BY_KEY.get(target_type)
     if ct is None or not ct.enabled:
         raise HTTPException(status_code=404, detail="内容类型不存在")
-    if db.get(ct.model, target_id) is None:
+    target = db.get(ct.model, target_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="评论对象不存在")
+    if ct.published_field is not None and getattr(target, ct.published_field) is None:
         raise HTTPException(status_code=404, detail="评论对象不存在")
 
 

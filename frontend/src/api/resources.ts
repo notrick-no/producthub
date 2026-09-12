@@ -3,6 +3,10 @@
 import { del, get, patch, post, postForm } from './client'
 import type {
   ActivityEvent,
+  BlogPost,
+  BlogPostPayload,
+  BlogTag,
+  BlogTagPayload,
   Category,
   CategoryPayload,
   Comment,
@@ -174,4 +178,61 @@ export function likeComment(id: number): Promise<void> {
 
 export function unlikeComment(id: number): Promise<void> {
   return del(`/comments/${id}/like`)
+}
+
+// ---------- Blog 博客(第五版)----------
+// 同样**不进 crud<T>() 工厂**:列表要带 ?tag_id=、点赞是 /like 子路径、
+// 删除是 204 无响应体。标签那四个虽然形状标准,但路径是 /blog/tags,
+// 与帖子共用 /blog 前缀 —— 拆成两个工厂反而更难读,索性一并写清楚。
+
+/**
+ * 帖子列表。后端已经把**别人的草稿**滤掉了,这里拿到什么就渲染什么
+ * (管理员拿到全部,含所有人的草稿)。
+ */
+export function listPosts(tagId?: number): Promise<BlogPost[]> {
+  const query = tagId ? `?tag_id=${tagId}` : ''
+  return get<BlogPost[]>(`/blog${query}`)
+}
+
+export function getPost(id: number): Promise<BlogPost> {
+  return get<BlogPost>(`/blog/${id}`)
+}
+
+export function createPost(payload: BlogPostPayload): Promise<BlogPost> {
+  return post<BlogPost>('/blog', payload)
+}
+
+/** 首次发布走这里:`{ status: 'published' }`。已发布的不能退回草稿(后端 422)。 */
+export function updatePost(id: number, payload: Partial<BlogPostPayload>): Promise<BlogPost> {
+  return patch<BlogPost>(`/blog/${id}`, payload)
+}
+
+export function deletePost(id: number): Promise<void> {
+  return del(`/blog/${id}`)
+}
+
+/** 帖子点赞 / 取消,都是幂等的。 */
+export function likePost(id: number): Promise<void> {
+  return post<void>(`/blog/${id}/like`, {})
+}
+
+export function unlikePost(id: number): Promise<void> {
+  return del(`/blog/${id}/like`)
+}
+
+// ---------- Blog tags(博客标签)----------
+export function listBlogTags(): Promise<BlogTag[]> {
+  return get<BlogTag[]>('/blog/tags')
+}
+
+export function createBlogTag(payload: BlogTagPayload): Promise<BlogTag> {
+  return post<BlogTag>('/blog/tags', payload)
+}
+
+export function updateBlogTag(id: number, payload: BlogTagPayload): Promise<BlogTag> {
+  return patch<BlogTag>(`/blog/tags/${id}`, payload)
+}
+
+export function deleteBlogTag(id: number): Promise<void> {
+  return del(`/blog/tags/${id}`)
 }

@@ -13,7 +13,7 @@
 """
 from dataclasses import dataclass
 
-from .models import Product, Requirement
+from .models import BlogPost, Product, Requirement
 
 
 @dataclass(frozen=True)
@@ -23,13 +23,21 @@ class ContentType:
     model: type  # ORM 模型,汇总计数用
     path: str  # 前端路由前缀,动态条目的链接由它拼
     title_field: str  # 对象上取「标题」的字段名,写事件时存成快照
+    published_field: str | None = None  # 哪一列非空才算「已发布」;None = 行存在即可见
     enabled: bool = True  # False = 本版还没做,首页不显示它
 
 
-# 顺序即首页汇总卡片的顺序。会议 / 博客以后加在这里,前端一行都不用改。
+# 顺序即首页汇总卡片的顺序。会议以后加在这里,前端一行都不用改。
 CONTENT_TYPES = (
     ContentType("product", "产品", Product, "/products", "name"),
     ContentType("requirement", "需求", Requirement, "/requirements", "description"),
+    # 博客是第一个**行存在 ≠ 可见**的类型:草稿也在表里,但不该进汇总、不该能被评论、
+    # 不该出现在别人的列表里。published_field 就是给这两处消费点一个声明式的判据
+    # (见 routers/home.py 的计数、routers/comments.py 的目标校验)—— 加别的带草稿的
+    # 类型时照填,不用再各写一遍。
+    ContentType(
+        "blog", "博客", BlogPost, "/blog", "title", published_field="published_at"
+    ),
 )
 
 BY_KEY = {ct.key: ct for ct in CONTENT_TYPES}

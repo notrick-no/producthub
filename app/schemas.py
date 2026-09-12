@@ -393,3 +393,89 @@ class CommentRead(BaseModel):
 
 # 自引用模型要显式重建一次,否则 replies 里那个前向引用在首次用到处才解析
 CommentRead.model_rebuild()
+
+
+# ---------- 博客(第五版)----------
+
+# 发布状态。**库里没有对应的列** —— 它由 blog_posts.published_at 派生
+# (非空 = 已发布),这里只是接口上的说法,见 models.BlogPost 的类注释。
+BLOG_STATUSES = ("draft", "published")
+BlogStatus = Literal["draft", "published"]
+
+BLOG_BODY_MAX_LEN = 20000  # 长文上限:挡住「整个文件粘进来」,不是产品限制
+
+
+class BlogTagBase(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    name: str = Field(min_length=1, max_length=100)
+
+
+class BlogTagCreate(BlogTagBase):
+    """POST /api/blog/tags 请求体。"""
+
+
+class BlogTagUpdate(BlogTagBase):
+    """PATCH /api/blog/tags/{id} 请求体。全部可选;缺席即不改。"""
+
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+
+
+class BlogTagRead(BlogTagBase):
+    model_config = ConfigDict(from_attributes=True, str_strip_whitespace=True)
+
+    id: int
+    created_at: datetime
+
+
+class BlogPostBase(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    title: str = Field(min_length=1, max_length=255)
+    body: str | None = Field(default=None, max_length=BLOG_BODY_MAX_LEN)
+    # 缺席 = 不打标签;[] = 清空;[id] = 替换成这组(语义同产品的 category_ids)
+    tag_ids: list[int] = Field(default_factory=list)
+    status: BlogStatus = "draft"
+
+
+class BlogPostCreate(BlogPostBase):
+    """POST /api/blog 请求体。
+
+    直接带 `status="published"` 就是「写完就发」,不用先建草稿再发一次 ——
+    首次发布会写 published_at,与后来再发走的是同一段规则(见 routers/blog.py)。
+    """
+
+
+class BlogPostUpdate(BlogPostBase):
+    """PATCH /api/blog/{id} 请求体。全部可选;缺席即不改。
+
+    `status` **只能往 published 走**:已发布的帖子不能退回草稿 —— 「发布时间」
+    是一个已经发生的事实,退回去就得把它抹掉。真要撤回发布,那是删除的事。
+    """
+
+    title: str | None = Field(default=None, min_length=1, max_length=255)
+    tag_ids: list[int] | None = None
+    status: BlogStatus | None = None
+
+
+class BlogPostRead(BaseModel):
+    """一篇帖子。
+
+    `status` 是**派生**的:published_at 有值就是 published。前端拿它渲染标签色
+    (`blogMeta.ts`),不用自己判空。`like_count` / `liked_by_me` 与评论同款。
+    """
+
+    model_config = ConfigDict(from_attributes=True, str_strip_whitespace=True)
+
+    id: int
+    title: str
+    body: str | None = None
+    status: BlogStatus
+    published_at: datetime | None = None
+    author_id: int | None = None
+    author_name: str  # **当前**姓名;账号被删之后才回落到写入时的快照
+    tags: list[BlogTagRead] = Field(default_factory=list)
+    like_count: int = 0
+    liked_by_me: bool = False
+    created_at: datetime
+    updated_at: datetime

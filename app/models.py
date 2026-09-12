@@ -334,6 +334,109 @@ class CommentLike(Base):
     )
 
 
+class BlogPost(Base):
+    """一篇博客帖子(第五版)。
+
+    **没有 `status` 列**:「已发布 / 草稿」由 `published_at` 有没有值决定 ——
+    一个事实一个出处。多存一列 status 就多出一种「两列说法不一致」的状态,而
+    `ContentType.published_field` 那套可见性判断也已经认准了 `published_at` 这一列。
+    接口上仍旧给前端一个派生的 `status` 字段(见 schemas.BlogPostRead)。
+
+    `published_at` **只在首次发布时写一次**,之后编辑不改:发布时间不是更新时间,
+    作者回来改个错别字,不该把帖子顶到最新。
+
+    `author_id` 与评论同款:SET NULL + `author_name` 兜底署名。帖子也是**活的内容**,
+    显示时以当前姓名为准(见 routers/blog.py 的 _current_author_name)。
+    """
+
+    __tablename__ = "blog_posts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    title: Mapped[str] = mapped_column(String(255))
+    body: Mapped[str | None] = mapped_column(Text)
+    # 非空 = 已发布;空 = 草稿。这是「发布状态」的唯一出处。
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    author_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    author_name: Mapped[str] = mapped_column(String(255))  # 仅 author_id 为空时兜底
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    # 通过关联表访问标签(用 list["BlogPostTag"],写法同 Product.category_links)
+    tag_links: Mapped[list["BlogPostTag"]] = relationship(
+        back_populates="post", cascade="all, delete-orphan"
+    )
+
+
+class BlogTag(Base):
+    """博客标签(第五版)。
+
+    照 categories 那套:独立一张表,**能改名、能按标签筛**。帖子存一串逗号分隔的
+    标签就省掉这两张表和那个管理弹窗,但也筛不了、改不了名 —— 标签一旦不能改名,
+    写错一个字就只能删了重打。
+    """
+
+    __tablename__ = "blog_tags"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100), unique=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    post_links: Mapped[list["BlogPostTag"]] = relationship(
+        back_populates="tag", cascade="all, delete-orphan"
+    )
+
+
+class BlogPostTag(Base):
+    """帖子-标签 关联表。
+
+    复合主键 (post_id, tag_id) 保证同一帖子不会重复打同一个标签。
+    删除帖子或标签时,关联记录随外键 ON DELETE CASCADE 一并删除。
+    """
+
+    __tablename__ = "blog_post_tags"
+
+    post_id: Mapped[int] = mapped_column(
+        ForeignKey("blog_posts.id", ondelete="CASCADE"), primary_key=True
+    )
+    tag_id: Mapped[int] = mapped_column(
+        ForeignKey("blog_tags.id", ondelete="CASCADE"), primary_key=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    post: Mapped[BlogPost] = relationship(back_populates="tag_links")
+    tag: Mapped[BlogTag] = relationship(back_populates="post_links")
+
+
+class PostLike(Base):
+    """帖子点赞(第五版)。
+
+    照 comment_likes 同款:复合主键 (post_id, user_id),天然保证一人一篇只能赞一次。
+    删帖子 / 删账号都靠外键 CASCADE 带走。
+    """
+
+    __tablename__ = "post_likes"
+
+    post_id: Mapped[int] = mapped_column(
+        ForeignKey("blog_posts.id", ondelete="CASCADE"), primary_key=True
+    )
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
 class Requirement(Base):
     """一条需求记录(第四版)。
 

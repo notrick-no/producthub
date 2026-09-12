@@ -12,7 +12,7 @@
 谓词只回答「能不能」,不负责报错。调用方照常 raise HTTPException —— 这样同一个谓词
 既能用在「守卫」也能用在「过滤」(比如列表里决定哪些行显示删除按钮)。
 """
-from .models import Comment, User
+from .models import BlogPost, Comment, User
 
 
 def can_delete_comment(user: User, comment: Comment) -> bool:
@@ -24,3 +24,26 @@ def can_delete_comment(user: User, comment: Comment) -> bool:
     if user.role == "admin":
         return True
     return comment.author_id is not None and comment.author_id == user.id
+
+
+def _is_author(user: User, obj) -> bool:
+    """这条东西是不是他写的。`author_id` 为空(作者账号被删)时谁都不是。"""
+    return obj.author_id is not None and obj.author_id == user.id
+
+
+def can_view_post(user: User, post: BlogPost) -> bool:
+    """能不能看见这篇帖子:**草稿只有作者与管理员看得见**。
+
+    看不见时的正确答复是 **404 而不是 403** —— 403 等于承认「有这么一篇」,
+    那本身就是不该漏的信息。所以调用方拿到 False 要照「不存在」处理。
+    """
+    return post.published_at is not None or user.role == "admin" or _is_author(user, post)
+
+
+def can_edit_post(user: User, post: BlogPost) -> bool:
+    """能不能改 / 删这篇帖子:作者本人,或管理员(与删除评论同一条规矩)。
+
+    **发布状态不在这里管**:「已发布的不能退回草稿」是编辑的字段规则,
+    不是「谁能改」的问题,所以它留在 routers/blog.py。
+    """
+    return user.role == "admin" or _is_author(user, post)

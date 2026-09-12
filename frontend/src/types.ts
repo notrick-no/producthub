@@ -238,3 +238,59 @@ export interface CommentPayload {
   body: string
   parent_id?: number | null
 }
+
+// ---------- 博客(第五版)----------
+// 与后端 schemas.BlogPostRead / models.BlogPost 对齐。
+
+/**
+ * 帖子状态。**库里没有这一列** —— 后端由 `published_at` 有没有值派生出来
+ * (见 models.BlogPost 的类注释)。前端当它是只读的:想发布就 PATCH `status`,
+ * 不要自己拼 `published_at`。
+ */
+export const BLOG_STATUSES = ['draft', 'published'] as const
+export type BlogStatus = (typeof BLOG_STATUSES)[number]
+
+/** 状态的中文名。列表、详情、表单三处都要用,放这里一处。 */
+export const BLOG_STATUS_TEXT: Record<BlogStatus, string> = {
+  draft: '草稿',
+  published: '已发布',
+}
+
+/** 正文长度上限,与后端 schemas.BLOG_BODY_MAX_LEN 一致(20000)。 */
+export const BLOG_BODY_MAX_LEN = 20000
+
+export interface BlogTag {
+  id: number
+  name: string
+  created_at: string
+}
+
+export interface BlogTagPayload {
+  name: string
+}
+
+export interface BlogPost {
+  id: number
+  title: string
+  body?: string | null
+  status: BlogStatus
+  /** 首次发布时写一次,之后编辑不改 —— 「发布时间」不是「更新时间」 */
+  published_at?: string | null
+  author_id: number | null
+  /** **当前**姓名;作者账号被删之后才回落到写入时的快照 */
+  author_name: string
+  tags: BlogTag[]
+  like_count: number
+  liked_by_me: boolean
+  created_at: string
+  updated_at: string
+}
+
+/** 新建 / 编辑一篇帖子。`status: 'published'` = 首次发布(或写完就发)。 */
+export interface BlogPostPayload {
+  title: string
+  body?: string | null
+  /** 缺席=不动;[] = 清空;含 id = 替换成这组(语义同产品的 category_ids) */
+  tag_ids?: number[]
+  status?: BlogStatus
+}

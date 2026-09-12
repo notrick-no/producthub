@@ -15,6 +15,9 @@ const ProductDetail = lazy(() => import('./pages/ProductDetail'))
 const RequirementList = lazy(() => import('./pages/RequirementList'))
 const RequirementDetail = lazy(() => import('./pages/RequirementDetail'))
 const RequirementFormPage = lazy(() => import('./pages/RequirementFormPage'))
+const BlogList = lazy(() => import('./pages/BlogList'))
+const BlogDetail = lazy(() => import('./pages/BlogDetail'))
+const BlogFormPage = lazy(() => import('./pages/BlogFormPage'))
 const AccountsPage = lazy(() => import('./pages/AccountsPage'))
 
 function PageFallback() {
@@ -53,6 +56,12 @@ export default function App() {
               <Route path="/requirements/new" element={<RequirementFormPage />} />
               <Route path="/requirements/:id" element={<RequirementDetail />} />
               <Route path="/requirements/:id/edit" element={<RequirementFormPage />} />
+
+              {/* 博客:任何登录员工都能写,编辑 / 删除限作者本人或管理员(后端判) */}
+              <Route path="/blog" element={<BlogList />} />
+              <Route path="/blog/new" element={<BlogFormPage />} />
+              <Route path="/blog/:id" element={<BlogDetail />} />
+              <Route path="/blog/:id/edit" element={<BlogFormPage />} />
 
               {/* 账号管理:仅管理员 */}
               <Route element={<RequireAdmin />}>

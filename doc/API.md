@@ -348,19 +348,23 @@ REST 风格,统一前缀 `/api`,请求/响应均为 JSON,字段 snake_case。字
 ```json
 [
   { "key": "product", "name": "产品", "count": 12, "url": "/products" },
-  { "key": "requirement", "name": "需求", "count": 5, "url": "/requirements" }
+  { "key": "requirement", "name": "需求", "count": 5, "url": "/requirements" },
+  { "key": "blog", "name": "博客", "count": 3, "url": "/blog" }
 ]
 ```
 
 每种内容类型现有多少条,顺序同后端 `app/content_types.py` 的 `CONTENT_TYPES`。
-**本版只返回已启用的类型**(会议 / 博客未做,不返回 —— 显示一张永远是 0 的卡会让人以为坏了)。
-前端直接渲染这个数组、不写死有哪几种:以后加会议,后端多返回一项,前端零改动。
+**只返回已启用的类型**(会议还没做,不返回 —— 显示一张永远是 0 的卡会让人以为坏了)。
+前端直接渲染这个数组、不写死有哪几种:第五版加博客时,前端一行没改。
+
+**只数「看得见的东西」**:登记了 `published_field` 的类型(博客 = `published_at`)会多一道
+`WHERE published_at IS NOT NULL`,所以**草稿不计入**博客那张卡。
 
 ---
 
 ## Comments 评论与点赞(第五版)
 
-产品、需求(以后的博客)共用这一套。`target_type` 的合法取值来自后端
+产品、需求、博客共用这一套。`target_type` 的合法取值来自后端
 `app/content_types.py` 的 `BY_KEY` —— 传了没登记的类型是 `404`。
 
 **评论形状**(下称 `Comment`):
@@ -392,7 +396,8 @@ REST 风格,统一前缀 `/api`,请求/响应均为 JSON,字段 snake_case。字
 - → `200` `Comment[]`,**只含顶层评论**,回复嵌在各自的 `replies` 里。
 - 顶层按 `created_at` 正序。`limit`(默认 200,1–500)限制的是**顶层条数**,
   回复跟着父评论一起返回。
-- `404` 内容类型不存在 / 评论对象不存在(草稿博客也走这里,见第五版 5C)。
+- `404` 内容类型不存在 / 评论对象不存在。**博客草稿也走这里** —— 草稿不算内容,
+  对它点评跟对不存在的帖子点评是一回事。
 
 ### POST /api/comments
 
@@ -415,6 +420,116 @@ REST 风格,统一前缀 `/api`,请求/响应均为 JSON,字段 snake_case。字
 
 **评论不记首页动态,也不登记为内容类型** —— 照「分类不记」的先例:评论是附着在内容上的
 互动,记了会把动态冲成流水账。
+
+---
+
+## Blog 博客(第五版)
+
+帖子是一篇长文,带标签,可存草稿、可点赞、可点评(点评复用上面那套 Comments)。
+
+**帖子形状**(下称 `Post`):
+
+```json
+{
+  "id": 4,
+  "title": "为什么我们把点评做成了多态的",
+  "body": "正文…",
+  "status": "published",
+  "published_at": "2026-09-12T10:20:00+08:00",
+  "author_id": 2,
+  "author_name": "张三",
+  "tags": [{ "id": 1, "name": "技术", "created_at": "..." }],
+  "like_count": 2,
+  "liked_by_me": true,
+  "created_at": "2026-09-11T09:00:00+08:00",
+  "updated_at": "2026-09-12T10:20:00+08:00"
+}
+```
+
+- **`status` 是派生字段**,库里没有这一列:后端按 `published_at` 有没有值算出
+  `"draft"` / `"published"`。所以它**只读** —— 想发布就 PATCH `{"status": "published"}`,
+  不要自己拼 `published_at`。
+- `published_at` **只在首次发布时写一次**,之后编辑不动它。「发布时间」不是「更新时间」。
+- `author_name` 规则同评论:当前姓名,账号被删之后回落到写入时的快照。
+
+### GET /api/blog
+
+- 可选 `?tag_id=`,按标签筛(唯一一个走后端 SQL 的筛选条件)。
+- → `200` `Post[]`,按 `COALESCE(published_at, created_at)` 倒序 ——
+  已发布的按发布时间,草稿按创建时间(它在创建那天出现)。
+- **只返回已发布的 + 自己的草稿**;管理员拿得到所有人的草稿。
+- 搜索与状态筛选由前端做(量级在千级以内),不走查询参数。
+
+### POST /api/blog
+
+- 请求体:`{"title": "...", "body": "...", "tag_ids": [1], "status": "draft"}`。
+  `title` 必填 1–255 字;`body` 上限 20000 字;`status` 缺省 `"draft"`。
+- 直接带 `{"status": "published"}` 就是**写完就发**,不用先建草稿再发一次。
+- → `201` `Post`。`400` 标签 id 不存在。
+
+### GET /api/blog/{id}
+
+- → `200` `Post`。
+- **`404` 不只表示「不存在」,也表示「是别人的草稿」** —— 对没有权限的人来说,
+  草稿就是不存在的。这里刻意**不给 `403`**:403 等于承认「有这么一篇」。
+  (已发布但属于别人的帖子是看得见的,那种情况改不动才回 `403`,见 PATCH。)
+
+### PATCH /api/blog/{id}
+
+- 请求体字段全部可选,缺席即不改;`tag_ids` 缺席=不动 / `[]`=清空 / `[id]`=整组替换。
+- `{"status": "published"}` = **首次发布**:写 `published_at`;
+  已经发布过的再传一次是空操作(时间保持第一次那个)。
+- `403` 帖子看得见但不是你的(作者本人或管理员才能改)。
+- `422` 对**已发布的**帖子传 `status="draft"` —— 退不回草稿。
+  「发布时间」是一个已经发生的事实,退回去就得把它抹掉;真要撤回发布,那是删除的事。
+
+### DELETE /api/blog/{id}
+
+- 作者本人或管理员 → `204`;`403` / `404` 规则同上。
+- 连带清掉它的**点评与帖子点赞**(`comments` 上没有指向帖子的外键,这笔账在
+  路由里手动结,见 `crud.delete_comments_for`)。
+
+### POST / DELETE /api/blog/{id}/like
+
+- 帖子点赞 / 取消,都是 `204`,都**幂等**。`liked_by_me` 是「**我**赞没赞」,
+  所以同一篇帖子在不同人眼里这个字段不同。
+
+### 标签 `/api/blog/tags`
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/blog/tags` | → `200` `BlogTag[]`(按 id 升序) |
+| POST | `/api/blog/tags` | `{"name": "..."}` → `201`;`409` 重名 |
+| PATCH | `/api/blog/tags/{id}` | `{"name": "..."}` → `200`;`409` 重名 |
+| DELETE | `/api/blog/tags/{id}` | → `204`。**帖子保留**,只是摘掉这个标签 |
+
+> ⚠️ **这四条在 `routers/blog.py` 里必须声明在 `/blog/{post_id}` 之前**。FastAPI 按声明顺序
+> 匹配,顺序被挪了的话 `/blog/tags` 会先落到 `{post_id}` 头上,拿 `"tags"` 转 int 得 `422`。
+> `tests/test_blog.py::test_tags_route_is_not_swallowed_by_post_id` 盯着这件事。
+
+**标签不记动态**(照「分类不记」的先例)。
+
+### 草稿:它会打穿「行存在 = 可见」这条假设
+
+`content_types.py` 建立在「行存在 ⇒ 该行可见」之上,这对产品 / 需求成立,**草稿不成立**。
+所以有四处必须一起挡住,少挡一处就是一处泄露,而且**都不会报错**:
+
+1. `GET /api/blog` 的列表过滤;
+2. `GET /api/blog/{id}` 的 `404`;
+3. `GET/POST /api/comments` 的目标校验 —— 否则 `target_type=blog&target_id=<猜>`
+   能问出「有这么一篇」,还能在草稿底下评论;
+4. `GET /api/summary` 的计数。
+
+后两处读的是 `ContentType.published_field` 这一个声明式字段,**不在各处写
+`if 是博客`** —— 这样「加内容类型只改一处」的性质保住了。
+
+### 动态规则
+
+草稿要是在动态里广播,等于把没写完的东西喊给所有人:
+
+- 草稿的新建 / 编辑 / 删除 —— **一条都不记**;
+- **首次发布**记一条 `create`(它此刻才出现在大家面前);
+- 已发布的帖子再编辑记 `update`,删除记 `delete`。
 
 ---
 

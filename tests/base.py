@@ -212,3 +212,26 @@ class ApiTestCase(unittest.TestCase):
         )
         self.assertEqual(r.status_code, 201, r.text)
         return r.json()
+
+    def new_post(
+        self,
+        title: str = "示例帖子",
+        status: str = "draft",
+        client: TestClient | None = None,
+        **fields,
+    ) -> dict:
+        """POST 新建一篇帖子(默认草稿),断言 201 后返回响应 JSON。
+
+        client 传另一个已登录客户端 = 以别人的身份发,用于草稿可见性这类用例。
+        """
+        r = (client or self.client).post(
+            "/api/blog", json={"title": title, "status": status, **fields}
+        )
+        self.assertEqual(r.status_code, 201, r.text)
+        return r.json()
+
+    def new_tag(self, name: str = "默认标签") -> dict:
+        """POST 新建一个博客标签,断言 201 后返回响应 JSON。"""
+        r = self.client.post("/api/blog/tags", json={"name": name})
+        self.assertEqual(r.status_code, 201, r.text)
+        return r.json()
