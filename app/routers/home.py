@@ -87,13 +87,19 @@ def list_activity(
 def get_summary(db: Session = Depends(get_db)):
     """项目汇总:每种内容类型的现有条数。
 
-    只返回 enabled 的类型 —— 本版没做的(会议、博客)不返回,前端就不会显示
-    一张永远是 0 的卡。以后做出来了,在 content_types.py 里打开 enabled 即可。
+    只返回 enabled 的类型 —— 本版没做的(会议)不返回,前端就不会显示一张永远是 0
+    的卡。以后做出来了,在 content_types.py 里打开 enabled 即可。
+
+    声明了 published_field 的类型(博客)只数**已发布**的:草稿还没打算给人看,
+    算进「博客 12 篇」等于把没写完的东西也报成资产。
     """
     items: list[SummaryItem] = []
     for ct in CONTENT_TYPES:
         if not ct.enabled:
             continue
-        count = db.scalar(select(func.count()).select_from(ct.model)) or 0
+        stmt = select(func.count()).select_from(ct.model)
+        if ct.published_field is not None:
+            stmt = stmt.where(getattr(ct.model, ct.published_field).isnot(None))
+        count = db.scalar(stmt) or 0
         items.append(SummaryItem(key=ct.key, name=ct.name, count=count, url=ct.path))
     return items

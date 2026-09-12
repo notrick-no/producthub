@@ -7,6 +7,7 @@ import {
   KeyOutlined,
   LogoutOutlined,
   ProfileOutlined,
+  ReadOutlined,
   TeamOutlined,
 } from '@ant-design/icons'
 import { useAuth } from '../auth/AuthContext'
@@ -17,11 +18,19 @@ const { Sider, Header, Content } = Layout
 /** 品牌强调色(取自 Logo 主色,与邀请邮件里的链接色一致) */
 const BRAND = '#2464e4'
 
-/** 侧栏三项固定导航(第四版:侧栏不再罗列分类,分类筛选下放到产品分析页)。 */
+/**
+ * 侧栏固定导航(第四版:侧栏不再罗列分类,分类筛选下放到产品分析页;
+ * 第五版加博客)。
+ *
+ * ⚠️ **加一项要同时改这里和 `navKeyFor()`**。只改这个数组的话,新入口点得进去、
+ * 菜单也会多出来,但那个页面不高亮 —— 因为高亮由 navKeyFor 的返回值决定,
+ * 而它对未知路径返回 undefined。两个地方离得不远,就是放在一起的原因。
+ */
 const NAV_ITEMS: MenuProps['items'] = [
   { key: '/', icon: <HomeOutlined />, label: '首页' },
   { key: '/products', icon: <AppstoreOutlined />, label: '产品分析' },
   { key: '/requirements', icon: <ProfileOutlined />, label: '需求记录' },
+  { key: '/blog', icon: <ReadOutlined />, label: '博客' },
 ]
 
 /** 当前路径属于导航里的哪一项;不在导航里的页面(如账号管理)不高亮任何一项。 */
@@ -29,6 +38,7 @@ function navKeyFor(pathname: string): string | undefined {
   if (pathname === '/') return '/'
   if (pathname.startsWith('/products')) return '/products'
   if (pathname.startsWith('/requirements')) return '/requirements'
+  if (pathname.startsWith('/blog')) return '/blog'
   return undefined
 }
 

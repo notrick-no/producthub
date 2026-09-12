@@ -143,27 +143,32 @@ class SummaryTest(ApiTestCase):
         self.assertEqual(r.status_code, 200, r.text)
         return r.json()
 
+    # 汇总卡片的顺序与名字就是 content_types.CONTENT_TYPES 的回声。往清单里加一个
+    # 内容类型,下面这几条会一起红 —— 那正是想要的:前端首页多一张卡是「改了一处、
+    # 动了三处」里最容易被忘掉的那一处(另外两处是导航与路由)。
     def test_shape_and_order(self):
-        """汇总按 content_types.py 的顺序返回,本版只有产品和需求。"""
+        """汇总按 content_types.py 的顺序返回:产品、需求、博客。"""
         summary = self._summary()
-        self.assertEqual([x["key"] for x in summary], ["product", "requirement"])
-        self.assertEqual([x["name"] for x in summary], ["产品", "需求"])
-        self.assertEqual([x["url"] for x in summary], ["/products", "/requirements"])
+        self.assertEqual([x["key"] for x in summary], ["product", "requirement", "blog"])
+        self.assertEqual([x["name"] for x in summary], ["产品", "需求", "博客"])
+        self.assertEqual(
+            [x["url"] for x in summary], ["/products", "/requirements", "/blog"]
+        )
 
     def test_counts_start_at_zero(self):
-        self.assertEqual([x["count"] for x in self._summary()], [0, 0])
+        self.assertEqual([x["count"] for x in self._summary()], [0, 0, 0])
 
     def test_counts_follow_data(self):
         self.new_product("Alpha")
         self.new_product("Beta")
         self.new_requirement("需求一")
-        self.assertEqual([x["count"] for x in self._summary()], [2, 1])
+        self.assertEqual([x["count"] for x in self._summary()], [2, 1, 0])
 
     def test_counts_follow_deletes(self):
         product = self.new_product("Alpha")
         self.new_requirement("需求一")
         self.client.delete(f"/api/products/{product['id']}")
-        self.assertEqual([x["count"] for x in self._summary()], [0, 1])
+        self.assertEqual([x["count"] for x in self._summary()], [0, 1, 0])
 
 
 class HomeAuthTest(ApiTestCase):
