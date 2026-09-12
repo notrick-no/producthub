@@ -52,6 +52,8 @@ REST 风格,统一前缀 `/api`,请求/响应均为 JSON,字段 snake_case。字
   "is_active": true,
   "must_change_password": false,
   "password_set": true,
+  "last_login_at": "2026-09-12T09:31:00+08:00",
+  "last_login_ip": "203.0.113.7",
   "created_at": "2026-09-10T18:00:00+08:00",
   "updated_at": "2026-09-10T18:00:00+08:00"
 }
@@ -60,10 +62,15 @@ REST 风格,统一前缀 `/api`,请求/响应均为 JSON,字段 snake_case。字
 `role ∈ {admin, employee}`;`password_set` 由后端派生(哈希非空 = 已设过密码);受邀未设密的员工
 该字段为 `false`。
 
+`last_login_at` / `last_login_ip` = **最后一次成功登录**的时间与来源 IP(第五版审计)。
+只有 `GET /api/users` 会填这两个字段,其它返回 `User` 的端点不查它,值为 `null`。
+
 ### POST /api/auth/login
 - 请求体:`{"email": "...", "password": "..."}`。邮箱大小写不敏感(服务端统一存小写)。
 - → `200` 返回 `User`,并 `Set-Cookie: producthub_session`(30 天)。
 - `401` 邮箱或密码不正确 / 账号已被禁用。
+- **每次尝试都写一条审计记录**(成功与失败都写,失败也留 IP 与 User-Agent),
+  保留 180 天,在成功登录时顺手清理。
 
 ### POST /api/auth/logout
 - → `204`,删除当前会话并清 cookie(会话已失效也返回 204)。
@@ -91,6 +98,8 @@ REST 风格,统一前缀 `/api`,请求/响应均为 JSON,字段 snake_case。字
 
 ### GET /api/users
 - 全部账号(含禁用、含受邀未设密的),按 id 升序 → `200` `User[]`。
+- 每条带出 `last_login_at` / `last_login_ip`(**最后一次成功登录**;从未登录为 `null`)。
+  账号页据此显示「最后登录」列。
 
 ### POST /api/users(创建 + 邀请)
 - 请求体:`{"name": "...", "email": "...", "department": "可选"}`,`name` ≤255 必填,`email` ≤255。
@@ -346,6 +355,66 @@ REST 风格,统一前缀 `/api`,请求/响应均为 JSON,字段 snake_case。字
 每种内容类型现有多少条,顺序同后端 `app/content_types.py` 的 `CONTENT_TYPES`。
 **本版只返回已启用的类型**(会议 / 博客未做,不返回 —— 显示一张永远是 0 的卡会让人以为坏了)。
 前端直接渲染这个数组、不写死有哪几种:以后加会议,后端多返回一项,前端零改动。
+
+---
+
+## Comments 评论与点赞(第五版)
+
+产品、需求(以后的博客)共用这一套。`target_type` 的合法取值来自后端
+`app/content_types.py` 的 `BY_KEY` —— 传了没登记的类型是 `404`。
+
+**评论形状**(下称 `Comment`):
+
+```json
+{
+  "id": 3,
+  "target_type": "product",
+  "target_id": 7,
+  "author_id": 2,
+  "author_name": "张三",
+  "body": "这个定价策略值得再挖一层",
+  "parent_id": null,
+  "deleted_at": null,
+  "like_count": 2,
+  "liked_by_me": true,
+  "replies": [],
+  "created_at": "2026-09-12T10:20:00+08:00"
+}
+```
+
+- `author_name` 是**当前**姓名(后端按 `author_id` join 出来的)。账号被删之后
+  `author_id` 变 `null`,这时回落到写入时记下的那个名字。
+- `deleted_at` 非空 = **墓碑**:`body` 已是空串,前端渲染成「该评论已删除」。
+- `replies` 里放的是同一形状的回复,但**回复的 `replies` 恒为空数组**(只有一层)。
+
+### GET /api/comments?target_type=&target_id=
+
+- → `200` `Comment[]`,**只含顶层评论**,回复嵌在各自的 `replies` 里。
+- 顶层按 `created_at` 正序。`limit`(默认 200,1–500)限制的是**顶层条数**,
+  回复跟着父评论一起返回。
+- `404` 内容类型不存在 / 评论对象不存在(草稿博客也走这里,见第五版 5C)。
+
+### POST /api/comments
+
+- 请求体:`{"target_type": "...", "target_id": 1, "body": "...", "parent_id": null}`。
+  `body` 1–5000 字(去空白后不能为空)。
+- → `201` `Comment`。带 `parent_id` 就是回复。
+- `404` 目标不存在;`422` 父评论不存在 / 父评论不在同一个对象上 / **父评论是回复**
+  (只允许一层)/ 父评论已被删除。
+
+### DELETE /api/comments/{id}
+
+- 作者本人或管理员 → `204`;否则 `403`。删除是**幂等**的。
+- **不是硬删**:正文清空、`deleted_at` 打点,行留着 —— 硬删一条顶层评论会连带删掉
+  **别人写的**回复。回复本身照常显示。
+
+### POST / DELETE /api/comments/{id}/like
+
+- 点赞 / 取消点赞,都是 `204`,都**幂等**(重复点不报错、不重复计数)。
+- `404` 评论不存在;`422` 评论已删除(墓碑不能被赞)。
+
+**评论不记首页动态,也不登记为内容类型** —— 照「分类不记」的先例:评论是附着在内容上的
+互动,记了会把动态冲成流水账。
 
 ---
 

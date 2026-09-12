@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 from .. import crud, mailer
 from ..db import get_db
 from ..deps import delete_user_sessions, now_utc, require_admin
-from ..models import User
+from ..models import LoginEvent, User
 from ..schemas import UserCreate, UserRead, UserUpdate, user_read_from_model
 from ..security import hash_password, make_temp_password, new_invite_token
 
@@ -60,11 +60,29 @@ def _require_mail_configured(purpose: str) -> None:
         )
 
 
+def _last_successful_logins(db: Session) -> dict[int, LoginEvent]:
+    """每个账号最近一次**成功**登录;一次查询取回全部,不在用户表存冗余列。
+
+    `succeeded.is_(True)` 不能省:否则「登录成功后又手滑输错一次密码」会让账号页
+    把那次**失败**的时间与 IP 显示成「最后登录」。
+    DISTINCT ON 取每组按 ORDER BY 排下来的第一行 —— 先按 user_id 分组,
+    组内按时间倒序,所以留下的就是最近那次。
+    """
+    rows = db.scalars(
+        select(LoginEvent)
+        .where(LoginEvent.succeeded.is_(True), LoginEvent.user_id.isnot(None))
+        .distinct(LoginEvent.user_id)
+        .order_by(LoginEvent.user_id, LoginEvent.created_at.desc())
+    ).all()
+    return {row.user_id: row for row in rows}
+
+
 @router.get("/users", response_model=list[UserRead])
 def list_users(db: Session = Depends(get_db)):
     """所有账号(含禁用;是否已设密在 UserRead.password_set)。"""
     users = db.scalars(select(User).order_by(User.id)).all()
-    return [user_read_from_model(u) for u in users]
+    last_logins = _last_successful_logins(db)
+    return [user_read_from_model(u, last_logins.get(u.id)) for u in users]
 
 
 @router.post("/users", response_model=UserRead, status_code=201)

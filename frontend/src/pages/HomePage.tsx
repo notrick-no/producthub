@@ -3,24 +3,13 @@ import { Link } from 'react-router-dom'
 import { App as AntApp, Card, List, Space, Tag, Typography } from 'antd'
 import { fetchSummary, listActivity } from '../api/resources'
 import type { ActivityAction, ActivityEvent, SummaryItem } from '../types'
+import { relativeTime } from '../format'
 import PhilosophyHero from '../components/PhilosophyHero'
 
 const ACTION_TEXT: Record<ActivityAction, string> = {
   create: '新建了',
   update: '更新了',
   delete: '删除了',
-}
-
-/** 相对时间:刚刚 / N 分钟前 / N 小时前 / N 天前,超过一周显示日期。 */
-function relativeTime(iso: string): string {
-  const minutes = Math.floor((Date.now() - new Date(iso).getTime()) / 60000)
-  if (minutes < 1) return '刚刚'
-  if (minutes < 60) return `${minutes} 分钟前`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours} 小时前`
-  const days = Math.floor(hours / 24)
-  if (days < 7) return `${days} 天前`
-  return new Date(iso).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })
 }
 
 /**

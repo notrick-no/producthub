@@ -9,11 +9,12 @@ record_event 也放这里:它是写路径上唯一一处「顺手记一笔」的
 免得每个写端点各拼一遍字段。
 """
 from fastapi import HTTPException
+from sqlalchemy import delete
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .content_types import content_type_of, title_of
-from .models import ActivityEvent, User
+from .models import ActivityEvent, Comment, User
 from .schemas import EventAction
 
 # 动作取值,存进 activity_events.action;类型取自 schemas(那是接口契约的出处),
@@ -73,5 +74,26 @@ def record_event(db: Session, actor: User | None, action: str, obj) -> None:
             content_type=ct.key,
             object_id=obj.id,
             title=title_of(obj, ct),
+        )
+    )
+
+
+def delete_comments_for(db: Session, obj) -> None:
+    """删掉挂在这个对象上的全部评论,**不提交**(跟着调用方的事务走)。
+
+    这是多态外键的账单:comments 上没有指向产品的 FK,数据库不会替我们级联,
+    所以每个删内容的端点都得记得叫一次 —— 忘了不会报错,只会留下一堆谁也看不到、
+    却永远躺在库里的评论。tests/test_comments.py 里有断言盯着它。
+
+    类型照 record_event 的做法从 obj 自己推,不让调用方手传一个字符串 ——
+    传错了不会报错,只会一条都删不掉。
+
+    一条 DELETE 覆盖回复:回复和顶层评论存在同一张表,`target_type`/`target_id`
+    也一样。`comment_likes` 与回复的 `parent_id` 都由数据库的 ON DELETE CASCADE 带走。
+    """
+    ct = content_type_of(obj)
+    db.execute(
+        delete(Comment).where(
+            Comment.target_type == ct.key, Comment.target_id == obj.id
         )
     )

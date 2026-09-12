@@ -17,6 +17,7 @@ import { PRODUCT_STATUS_COLOR } from '../productMeta'
 import { externalHref } from '../externalLink'
 import { formatDate } from '../format'
 import ProductImagesCard from '../components/ProductImagesCard'
+import CommentThread from '../components/CommentThread'
 
 const nf = new Intl.NumberFormat('zh-CN')
 
@@ -209,6 +210,11 @@ export default function ProductDetail() {
       <Section title="网站的用户评价" content={product.user_reviews} />
       <Section title="网站的营销策略" content={product.marketing_strategy} />
       <Section title="产品技术分析" content={product.tech_analysis} />
+
+      {/* 点评留在最后:它是互动,不是这份研究的正文 */}
+      <Card title="点评">
+        <CommentThread targetType="product" targetId={product.id} />
+      </Card>
     </Space>
   )
 }

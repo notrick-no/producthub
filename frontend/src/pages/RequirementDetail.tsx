@@ -27,6 +27,7 @@ import {
 } from '../requirementMeta'
 import { externalHref } from '../externalLink'
 import { formatDate } from '../format'
+import CommentThread from '../components/CommentThread'
 
 /** 需求详情页:标题 + 标签 + 详情长文 + 其余字段。 */
 export default function RequirementDetail() {
@@ -191,6 +192,11 @@ export default function RequirementDetail() {
             },
           ]}
         />
+      </Card>
+
+      {/* 点评留在最后:它是互动,不是这条需求本身 */}
+      <Card title="点评">
+        <CommentThread targetType="requirement" targetId={requirement.id} />
       </Card>
     </Space>
   )

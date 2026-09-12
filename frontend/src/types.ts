@@ -17,6 +17,10 @@ export interface User {
   must_change_password: boolean
   /** 是否已设过密码(邀请未完成 = false) */
   password_set: boolean
+  /** 最后一次**成功**登录(第五版审计);没登录过为 null */
+  last_login_at?: string | null
+  /** 那次登录的来源 IP;取不到为 null */
+  last_login_ip?: string | null
   created_at: string
   updated_at: string
 }
@@ -201,4 +205,36 @@ export interface SummaryItem {
   count: number
   /** 点进去的列表页地址 */
   url: string
+}
+
+// ---------- 评论 / 点赞(第五版)----------
+
+/**
+ * 一条评论。回复以 `replies` 嵌在顶层评论里返回(只有一层,回复的 replies 恒为空数组),
+ * 前端不用自己拼树。
+ */
+export interface Comment {
+  id: number
+  target_type: string
+  target_id: number
+  author_id: number | null
+  /** **当前**姓名;账号被删之后回落到写入时记下的那个名字 */
+  author_name: string
+  /** 墓碑(已删除)时是空串 —— 看 deleted_at 决定渲染成「该评论已删除」 */
+  body: string
+  parent_id: number | null
+  /** 非 null = 已删除的墓碑:正文已清空,但行还在,所以回复不会跟着消失 */
+  deleted_at: string | null
+  like_count: number
+  liked_by_me: boolean
+  replies: Comment[]
+  created_at: string
+}
+
+/** 发一条评论。parent_id 有值 = 回复(只能回复顶层评论)。 */
+export interface CommentPayload {
+  target_type: string
+  target_id: number
+  body: string
+  parent_id?: number | null
 }

@@ -202,12 +202,16 @@ class UserRead(BaseModel):
     is_active: bool
     must_change_password: bool
     password_set: bool  # 是否已设过密码(派生:哈希非空)
+    # 最后一次**成功**登录(第五版,来自 login_events)。只在账号列表里带出来,
+    # /auth/me 等处没有这个查询,留 None —— 所以是可选而非必填。
+    last_login_at: datetime | None = None
+    last_login_ip: str | None = None
     created_at: datetime
     updated_at: datetime
 
 
-def user_read_from_model(user) -> UserRead:
-    """ORM User → UserRead(补派生字段 password_set)。"""
+def user_read_from_model(user, last_login=None) -> UserRead:
+    """ORM User → UserRead(补派生字段 password_set;可选带最近一次成功登录)。"""
     return UserRead(
         id=user.id,
         email=user.email,
@@ -217,6 +221,8 @@ def user_read_from_model(user) -> UserRead:
         is_active=user.is_active,
         must_change_password=user.must_change_password,
         password_set=bool(user.password_hash),
+        last_login_at=last_login.created_at if last_login else None,
+        last_login_ip=last_login.ip if last_login else None,
         created_at=user.created_at,
         updated_at=user.updated_at,
     )
@@ -339,3 +345,51 @@ class SummaryItem(BaseModel):
     name: str  # 中文名,如「需求」
     count: int
     url: str
+
+
+# ---------- 评论 / 点赞(第五版)----------
+# 产品、需求、以后的博客共用这一套。target_type 的合法取值不在这里写死 ——
+# 它取自 app/content_types.py 的 BY_KEY(「有哪些内容类型」的唯一出处),
+# 在这里再抄一份就会有两份清单,加内容类型时漏改一份不会报错。
+
+# 单条评论上限。全站没有富文本,评论就是一坨纯文本 —— 这个数只用来挡住
+# 「把整个文件粘进输入框」,不是产品上的限制。
+COMMENT_MAX_LEN = 5000
+
+
+class CommentCreate(BaseModel):
+    """POST /api/comments 请求体。"""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    target_type: str = Field(min_length=1, max_length=20)
+    target_id: int
+    body: str = Field(min_length=1, max_length=COMMENT_MAX_LEN)
+    # 有值 = 回复。只允许一层:它必须指向一条顶层评论,见 routers/comments.py
+    parent_id: int | None = None
+
+
+class CommentRead(BaseModel):
+    """一条评论。回复以 `replies` 嵌在顶层评论里返回,前端不用自己拼树。
+
+    `author_name` 是**当前**姓名(后端按 author_id join 出来的);账号被删之后
+    才回落到写入时记下的那个名字。`body` 在墓碑(已删除)时是空串 ——
+    看 `deleted_at` 决定渲染成「该评论已删除」。
+    """
+
+    id: int
+    target_type: str
+    target_id: int
+    author_id: int | None
+    author_name: str
+    body: str
+    parent_id: int | None
+    deleted_at: datetime | None
+    like_count: int
+    liked_by_me: bool
+    replies: list["CommentRead"] = Field(default_factory=list)
+    created_at: datetime
+
+
+# 自引用模型要显式重建一次,否则 replies 里那个前向引用在首次用到处才解析
+CommentRead.model_rebuild()
