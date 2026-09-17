@@ -349,9 +349,19 @@ def model_name() -> str:
 
 
 def _reasoning_effort() -> str | None:
-    """思考档位,从 `AI_REASONING_EFFORT` 读。不给就是 dsh 的默认(`high`)。
+    """思考档位,从 `AI_REASONING_EFFORT` 读。
 
     合法值 `off` / `low` / `high` / `max`。**不校验** —— 理由见 `_start`。
+
+    **不给的效果就是 `high`,但别写成「不给就是 dsh 的默认 high」**(这版注释一度
+    是这么写的,2026-09-17 核实后改掉)。机制是:不给 = 我们**根本不发** `reasoningEffort`
+    这个字段,dsh 那侧省略就只是省略。真正定默认值的是**服务端** —— DeepSeek 官方
+    文档(guides/thinking_mode)原话:「Thinking mode is enabled by default, with the
+    default effort being `high`」。结论一样,理由不同:写错理由的人会以为 dsh 会替我们
+    兜底一个档位,于是去 dsh 里找那个默认值,找不到。
+
+    (顺带记一下官方那张映射表:`minimal`→low、`medium`→high、`xhigh`→high、`max`/`ultra`→max。
+    公开的控制值只有 low / high / max,所以中间那几个写进来等于没写。)
 
     ⚠️ 第七版之前这是 `ai_client` 逐次下发的一个请求字段;内核换了之后它变成
     `AgentOptions` 的字段(实例级),所以它和 `max_tokens` 一样进了实例池的键 ——
@@ -384,7 +394,8 @@ def _start(
         model=model_name(),
         # 思考档位。**不在这里校验**:与 `AI_MODEL` 一致 —— 值由部署者负责,
         # 而 dsh 会在 initialize 时明确拒绝非法值(合法的是 `off` / `low` /
-        # `high` / `max`,不给就是 `high`)。自己再维护一份白名单,等于给以后
+        # `high` / `max`;不给的效果是 `high`,但那是**服务端**的默认,见
+        # `_reasoning_effort`)。自己再维护一份白名单,等于给以后
         # 新增的档位埋一颗「我们悄悄忽略了它」的雷。
         reasoning_effort=reasoning_effort,
         cwd=str(_workspace()),
