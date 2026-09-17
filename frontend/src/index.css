@@ -8,6 +8,15 @@
   --app-content-pad: 24px;
 }
 
+/* 窄屏:内容区左右内边距收一半 —— 390px 上 24×2 就是 12% 的宽度。
+   只改这一个变量,顶栏和「撑满一屏」的页面(见下 .ai-page)会一起跟着变,
+   不会像写死两处那样悄悄错开。断点与登录页 / AI 对话页同一个。 */
+@media (max-width: 880px) {
+  :root {
+    --app-content-pad: 12px;
+  }
+}
+
 html,
 body,
 #root {
@@ -307,6 +316,86 @@ body {
   overflow-y: auto;
   overflow-x: hidden;
   overscroll-behavior: contain;
+}
+
+/* ---------- 窄屏(第七版联调补的)----------
+ *
+ * 原来这两列的布局是**写在 JSX 的 inline style 里**的(宽 240 + borderRight + flex),
+ * 于是没有任何断点能改它。390px 上量出来的结果是:外壳侧栏 220px + 这 240px 一起把
+ * 消息区挤到 **16px** —— 右边那一栏基本看不见了(截图在联调记录里)。
+ *
+ * 所以把布局挪进 CSS(只挪布局,视觉没动),窄屏下改成上下两段:
+ * 会话列表横过来变成顶部一条(限高、自己滚),消息区拿满剩下的高度。
+ * 断点用 **880px,与登录页同一个**(那里也是「窄到一定程度就换构图」)。
+ *
+ * ⚠️ 这两个类**必须是普通 div**,不能是 antd 的 <Flex>:它的方向是 cssinjs 运行时
+ * 注进去的类,和我这条媒体查询同为 0/1/0 的优先级,谁赢取决于样式表插入顺序 ——
+ * 而那正是「读源码推布局」最容易推错的地方(见 index.css 上面那段 ⚠️)。
+ */
+.ai-body {
+  display: flex;
+  align-items: stretch;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* 左列:会话列表。它自己滚 —— 会话攒多了不该把右边的面板一起顶长。 */
+.ai-conv-list {
+  width: 240px;
+  flex: none;
+  padding: 8px;
+  overflow-y: auto;
+  border-right: 1px solid #f0f0f0;
+}
+
+/* 右列:消息流 + 输入框。 */
+.ai-chat-pane {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+@media (max-width: 880px) {
+  .ai-body {
+    flex-direction: column;
+  }
+  .ai-conv-list {
+    width: auto;
+    /* 限高三成:会话列表再长也不许把消息区压没。消息区在下面 flex:1,拿剩下的。 */
+    max-height: 32%;
+    border-right: none;
+    border-bottom: 1px solid #f0f0f0;
+  }
+}
+
+/* ---------- 窄屏:展开的左侧导航改成**浮层** ----------
+ *
+ * antd 的 Sider 收起(<768,它的 md 断点)时会留一个「把手」,点一下又展开 ——
+ * 但它是**参与布局**的:展开就是实打实占 220px。手机上实测,点开导航后内容区
+ * 从 363px 被挤到 **144px**,消息区和输入框跟着变形 —— 等于把刚修好的毛病
+ * 从「AI 页自己的两列」搬到「外壳的导航」上再犯一次。
+ *
+ * 所以窄屏下让它脱离文档流浮在内容上面(手机上的常规做法)。
+ * `:has()` 那行是必须的:antd 的 .ant-layout **没有** position,
+ * 不定个定位祖先的话,absolute 会一路跑到文档上,`top/bottom: 0` 就变成整篇的高度。
+ *
+ * 断点写 767.98 而不是 768:antd 内部判定 md 断点用的就是 767.98,两边对齐,
+ * 免得出现「它认为收起了、我们以为展开了」的一像素缝隙。 */
+@media (max-width: 767.98px) {
+  .ant-layout:has(> .ant-layout-sider) {
+    position: relative;
+  }
+  .ant-layout-sider {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 30;
+    overflow-y: auto;
+  }
 }
 
 /* 思考过程正文 / 工具结果预览(模型写的字,长短完全不可控)。 */

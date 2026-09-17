@@ -513,10 +513,27 @@ class AiMessage(Base):
     才硬失败。那时这一列是承重的。
 
     **第七版把内核换成 dsh 之后,上游请求不再由我们发**(见 `ai_harness` 模块头),
-    历史回传是 dsh 自己会话里的事。现在留着这一列只为**展示**:前端 ThoughtChain
-    靠它渲染「模型的思考过程」,排障时也是它最有用的部分。
-    它**不再是承重列** —— 清空它不会让任何请求失败,只会让思考过程消失。
+    历史回传是 dsh 自己会话里的事。它**不再是承重列** —— 清空它不会让任何请求失败。
     (因此 `ai_agent._history()` 也不再还原这个键,那里有详细说明。)
+
+    ## 它现在到底服务谁(2026-09-17 联调时改正:这里原先写的是「前端 ThoughtChain
+    ## 靠它渲染」,**那句话是错的**)
+
+    写下来是因为它读起来太顺、太像承重的,而顺着它推会推错:
+
+    - **前端渲染思考过程,读的是 SSE 事件**(`reasoning_delta` → 一个局部 state),
+      **不是这一列**。所以生成过程中屏幕上确实有思考链,那是流的功劳。
+    - 一轮结束、库里那份铺回界面之后,**没有任何代码再读这个字段** ——
+      历史消息那条渲染路径只读 `role` / `content` / `status` / `error` / token 两列。
+      真机核对过:库里 695 字的思考过程,界面上一处都不显示(前端 `types.ts` 里
+      虽然有这个字段的声明,但全仓库没有第二个引用)。
+    - 所以它**当前的实际用途是排障**:出问题时翻库里那一轮模型想了什么。
+      它仍然通过 API 发给前端(每次拉会话都带上),那是为「以后要在历史里也画出来」
+      留的口子 —— 那个功能**至今没做**,这里不假装它做了。
+
+    `tool_trace` **是同一个处境**(每回合一条工具轨迹,同样只写不读),
+    两条列一起看:它们都是「数据库里存着、界面不看」的展示备用列。
+    改这一段时请一并核对前端,别再写一句读起来很顺的假话。`doc/架构.md` 同步改过。
 
     **NULL 与 `''` 的区分同样作废。** 那时它必须存在:空串也得原样回传,不能丢键,
     所以用 nullable Text 精确对应「字段不存在」与「存在但为空」。
@@ -544,9 +561,11 @@ class AiMessage(Base):
     )
     role: Mapped[str] = mapped_column(String(20))  # user / assistant
     content: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
-    # NULL = 没有思考过程(第七版起 '' 已不可能写进来,见类注释)。只为展示。
+    # NULL = 没有思考过程(第七版起 '' 已不可能写进来)。
+    # ⚠️ 当前**没有界面读者**,用途与处境见类注释「它现在到底服务谁」。
     reasoning_content: Mapped[str | None] = mapped_column(Text)
-    tool_trace: Mapped[str | None] = mapped_column(Text)  # JSON 文本,只为展示
+    # JSON 文本;**与 reasoning_content 同一个处境**(只写不读,见类注释)。
+    tool_trace: Mapped[str | None] = mapped_column(Text)
     prompt_tokens: Mapped[int | None] = mapped_column(Integer)
     completion_tokens: Mapped[int | None] = mapped_column(Integer)
     # running = 流还在进行(进程被重启会留下这种行,启动时清扫);

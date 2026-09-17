@@ -132,7 +132,21 @@ export default function AppLayout() {
 
       {/* 内层 Layout 带 Sider,antd 自动判定为横向;它 flex:auto,撑满顶栏以下的高度 */}
       <Layout>
-        <Sider theme="light" width={220} style={{ borderRight: '1px solid #f0f0f0' }}>
+        {/* ⚠️ 窄屏必须把它收起来(断点在下),否则 220px 的导航会把内容区
+            挤成一条缝:390px 的机器上,220(导航)+ 24(内边距)之后只剩 146px。
+            `collapsedWidth={0}` = 收起时宽度为 0,antd 会在左上角给一个「展开」的
+            小把手(zero-width trigger),导航因此仍然点得到 —— 不是把导航藏起来。
+
+            为什么是 md(768):手机 / 竖屏平板收起来,横屏平板(≥768)与桌面保持
+            现在的样子。AI 对话页的上下堆叠断点是 880,两者故意不必相同 ——
+            那是「页面内部怎么排」,这是「外壳留不留导航」。 */}
+        <Sider
+          theme="light"
+          width={220}
+          breakpoint="md"
+          collapsedWidth={0}
+          style={{ borderRight: '1px solid #f0f0f0' }}
+        >
           <Menu
             mode="inline"
             items={NAV_ITEMS}

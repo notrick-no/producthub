@@ -344,8 +344,11 @@ export interface AiMessage {
   /** 库里是自由字符串,实际只会是这两种。 */
   role: 'user' | 'assistant'
   content: string
-  /** null = 当时协议里**没有**这个字段;'' = 有但是空。前端两者都当「没有思考过程」。 */
+  /** 模型的思考过程。**界面目前不显示它**(生成中那棵 ThoughtChain 读的是 SSE 事件,
+   * 与这个字段无关);库里也只可能是 null 或有内容的串(`''` 写不进来)。
+   * 完整说明见后端 `app/models.py` 的 `AiMessage` 类注释。 */
   reasoning_content?: string | null
+  /** 每回合一条工具轨迹。同样**目前不显示**,与 reasoning_content 一个处境。 */
   tool_trace?: AiToolRound[] | null
   prompt_tokens?: number | null
   completion_tokens?: number | null

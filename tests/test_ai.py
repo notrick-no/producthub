@@ -308,6 +308,78 @@ class AiToolTests(AiTestBase):
             result = ai_tools.search_posts(db, viewer=self._viewer(), query="恐龙")
         self.assertEqual(result["count"], 0)
 
+    def test_empty_query_lists_posts_newest_first(self):
+        """**空查询 = 列出最近的**,不是报错(第七版联调改的,理由见 `_clean_query`)。
+
+        真机上模型问「站上有哪些帖子」就是先拿空查询调 `search_posts` 的 —— 原来是
+        `{"error": "搜索词为空"}`,于是它开始猜关键词,一轮白跑五次工具调用。
+        """
+        self.new_post(title="旧帖子", status="published")
+        self.new_post(title="新帖子", status="published")
+        with SessionLocal() as db:
+            result = ai_tools.search_posts(db, viewer=self._viewer(), query="")
+        self.assertNotIn("error", result)
+        self.assertEqual(
+            [row["title"] for row in result["results"]], ["新帖子", "旧帖子"]
+        )
+
+    def test_empty_query_still_excludes_drafts(self):
+        """留空只是去掉 LIKE 那个条件 —— **只读已发布这堵墙照旧**。
+
+        这条和 `test_search_posts_excludes_drafts` 是一对:那条钉「有查询词时」,
+        这条钉「没有查询词时」。空查询是唯一一条会走到「整表扫」的路径,
+        漏掉过滤的话症状最重(全部草稿一次性进上下文)。
+        """
+        self.new_post(title="已发布的", status="published")
+        self.new_post(title="还没写完的草稿", status="draft")
+        with SessionLocal() as db:
+            result = ai_tools.search_posts(db, viewer=self._viewer(), query="")
+        titles = [row["title"] for row in result["results"]]
+        self.assertEqual(titles, ["已发布的"])
+
+    def test_empty_query_lists_products_and_requirements(self):
+        """三个 search_* 工具同一套口径,免得模型在一个上学会了、在另一个上又撞墙。"""
+        self.new_product(name="甲产品")
+        self.new_requirement(description="甲需求")
+        with SessionLocal() as db:
+            products = ai_tools.search_products(db, viewer=self._viewer(), query="")
+            requirements = ai_tools.search_requirements(db, viewer=self._viewer(), query="")
+        self.assertNotIn("error", products)
+        self.assertIn("甲产品", [row["name"] for row in products["results"]])
+        self.assertNotIn("error", requirements)
+        self.assertIn("甲需求", [row["description"] for row in requirements["results"]])
+
+    def test_list_mode_defaults_to_the_cap_not_five(self):
+        """列出模式下默认给到上限(20),不是平时那 5 条。
+
+        `count` 是**返回条数**、不是总数,所以给 5 条会让模型把「返回了 5 条」
+        当成「一共 5 条」—— 那是一个说不通的答案,而且看着很像对的。
+        """
+        for i in range(8):
+            self.new_post(title=f"第{i}篇", status="published")
+        with SessionLocal() as db:
+            result = ai_tools.search_posts(db, viewer=self._viewer(), query="")
+        self.assertEqual(result["count"], 8)
+
+    def test_post_like_count_is_exposed(self):
+        """点赞数进工具结果 —— 界面上点赞按钮旁边就是这个数字,不是新信息。
+
+        真机上模型答「赞数查不到」是对的:那几个工具**确实**没有这个字段。
+        """
+        liked = self.new_post(title="有人赞的帖子", status="published")
+        self.new_post(title="没人赞的帖子", status="published")
+        r = self.client.post(f"/api/blog/{liked['id']}/like")
+        self.assertEqual(r.status_code, 204, r.text)
+
+        with SessionLocal() as db:
+            detail = ai_tools.get_post(db, viewer=self._viewer(), post_id=liked["id"])
+            listed = ai_tools.search_posts(db, viewer=self._viewer(), query="")
+        self.assertEqual(detail["like_count"], 1)
+        self.assertEqual(
+            {row["title"]: row["like_count"] for row in listed["results"]},
+            {"有人赞的帖子": 1, "没人赞的帖子": 0},
+        )
+
     def test_search_limit_is_capped(self):
         for i in range(30):
             self.new_product(name=f"产品{i:02d}")

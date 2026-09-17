@@ -557,7 +557,12 @@ class AiMessageRead(BaseModel):
 
     `reasoning_content` 为 None = 没有思考过程。第七版起**不会有空串**了
     (换内核后不再需要向协议回传它,写入路径把空串统一转成 None,见 models.AiMessage)。
-    前端两者都当「没有思考过程」渲染即可 —— 这条约定没变,所以前端不用改。
+    哪天前端要渲染它,两者都当「没有思考过程」即可 —— 这条约定没变,所以到时候不用改协议。
+
+    ⚠️ **但前端现在并没有渲染它**(`tool_trace` 也一样)。生成期间那棵 ThoughtChain 读的是
+    SSE 的 `reasoning_delta` 事件,历史消息那条路径不碰这两个字段 —— 完整说明与核对方法在
+    `models.AiMessage` 类注释里。这条注释从前提过「前端照此渲染」,那是照着设计意图写的,
+    不是照着前端代码写的;**改协议前请先去看前端到底读不读**。
     """
 
     model_config = ConfigDict(from_attributes=True)

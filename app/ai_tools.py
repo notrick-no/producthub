@@ -50,6 +50,7 @@ from .models import (
     BlogPostTag,
     BlogTag,
     Category,
+    PostLike,
     Product,
     ProductCategory,
     ProductPriceTier,
@@ -128,6 +129,27 @@ def _clean_query(raw: Any) -> str:
     return str(raw or "").strip()[:_QUERY_MAX_CHARS]
 
 
+# ---------------------------------------------------------------- 查询词留空
+#
+# 三个 `search_*` 工具对「查询词留空」的处理是**列出最近的**,不是报错。
+#
+# 原来它们返回 `{"error": "搜索词为空"}`。第七版真机联调里,模型问「站上有哪些博客
+# 帖子」时**正是**先调 `search_posts(query="")` 撞上这句,然后开始**猜关键词**
+# (`a` / `产品` / `测试` / `的`)—— 一轮问答 8 次工具调用里 5 次是这么白跑的,
+# 最后靠 `recent_activity` + 逐个 `get_post` 才凑出答案。
+#
+# 站内本来就没有「列出全部帖子」这个工具,而模型表达「列出全部」的方式就是留空。
+# 所以:留空 = 去掉 LIKE 那个条件、按时间(帖子/需求)或名称(产品)列出最近 limit 条。
+# **description 里也要写明**,因为模型读的是 description —— 它不会去读我们的报错。
+#
+# ⚠️ 只读已发布那条**没有跟着放松**:`_published_only()` 照旧在,空查询也绕不过去,
+# `test_empty_query_still_excludes_drafts` 钉着这一点。
+#
+# 顺带一条:留空时 `limit` 的默认值取**上限**(20)而不是平时的 5 —— 这时模型问的是
+# 「有哪些」,给 5 条会让它把「返回了 5 条」当成「一共 5 条」(`count` 是**返回条数**,
+# 不是总数)。它自己传了 limit 就听它的。
+
+
 def _like_escape(value: str) -> str:
     """转义 LIKE 的通配符。
 
@@ -150,6 +172,15 @@ def _limit(raw: Any, *, default: int = _SEARCH_DEFAULT_LIMIT, cap: int = _SEARCH
     except (TypeError, ValueError):
         return default
     return max(1, min(value, cap))
+
+
+def _list_limit(raw: Any, query: str) -> int:
+    """搜索工具的取数上限:查询词留空(列出模式)时默认给到上限。
+
+    见上面「查询词留空」那段最后一条:列出模式下给 5 条,模型会把「返回了 5 条」
+    当成「一共 5 条」。它显式传了 limit 就听它的(`_limit` 会夹到 [1, cap])。
+    """
+    return _limit(raw, default=_SEARCH_MAX_LIMIT if not query else _SEARCH_DEFAULT_LIMIT)
 
 
 def _published_only(stmt):
@@ -212,6 +243,25 @@ def _post_tags(db: Session, post_ids: list[int]) -> dict[int, list[str]]:
     return grouped
 
 
+def _post_like_counts(db: Session, post_ids: list[int]) -> dict[int, int]:
+    """一次 GROUP BY 取回这批帖子的点赞数。
+
+    与 `routers/blog.py::_build` 里那条是**同一个查询**,但**不复用那个函数**:
+    它收的是 ORM 对象、还要顺带算 `liked_by_me`(要提问者的 user_id),
+    而 AI 只需要「有多少人赞过」这个对所有人都可见的数字。
+    照 `_author_names` 的先例 —— 跨模块借一个签名不匹配的函数,比重复五行贵。
+    """
+    if not post_ids:
+        return {}
+    return dict(
+        db.execute(
+            select(PostLike.post_id, func.count())
+            .where(PostLike.post_id.in_(post_ids))
+            .group_by(PostLike.post_id)
+        ).all()
+    )
+
+
 def _iso(value: Any) -> Any:
     """date / datetime → ISO 字符串;None 原样。"""
     return value.isoformat() if hasattr(value, "isoformat") else value
@@ -220,17 +270,16 @@ def _iso(value: Any) -> Any:
 # ---------------------------------------------------------------- 产品
 
 def search_products(db: Session, *, viewer: Viewer, query: Any = "", limit: Any = None) -> dict:
-    """按名称搜产品。搜索**只搜 `name`**,顺带回一段简介预览。"""
+    """按名称搜产品。搜索**只搜 `name`**,顺带回一段简介预览。
+
+    查询词**留空 = 按名称列出全部**(最多 limit 条),理由见 `_clean_query` 下面那段。
+    """
     q = _clean_query(query)
-    if not q:
-        return {"error": "搜索词为空"}
-    take = _limit(limit)
-    products = db.scalars(
-        select(Product)
-        .where(Product.name.ilike(_like(q), escape="\\"))
-        .order_by(Product.name)
-        .limit(take)
-    ).all()
+    take = _list_limit(limit, q)
+    stmt = select(Product)
+    if q:
+        stmt = stmt.where(Product.name.ilike(_like(q), escape="\\"))
+    products = db.scalars(stmt.order_by(Product.name).limit(take)).all()
     cats = _product_categories(db, [p.id for p in products])
     return {
         "count": len(products),
@@ -311,17 +360,13 @@ def list_categories(db: Session, *, viewer: Viewer) -> dict:
 # ---------------------------------------------------------------- 需求
 
 def search_requirements(db: Session, *, viewer: Viewer, query: Any = "", limit: Any = None) -> dict:
-    """按需求描述搜需求。"""
+    """按需求描述搜需求。查询词**留空 = 按时间列出最新的**,理由见 `_clean_query` 下面那段。"""
     q = _clean_query(query)
-    if not q:
-        return {"error": "搜索词为空"}
-    take = _limit(limit)
-    rows = db.scalars(
-        select(Requirement)
-        .where(Requirement.description.ilike(_like(q), escape="\\"))
-        .order_by(Requirement.id.desc())
-        .limit(take)
-    ).all()
+    take = _list_limit(limit, q)
+    stmt = select(Requirement)
+    if q:
+        stmt = stmt.where(Requirement.description.ilike(_like(q), escape="\\"))
+    rows = db.scalars(stmt.order_by(Requirement.id.desc()).limit(take)).all()
     return {
         "count": len(rows),
         "results": [
@@ -366,23 +411,25 @@ def get_requirement(db: Session, *, viewer: Viewer, requirement_id: Any = None) 
 # ---------------------------------------------------------------- 博客(只读已发布)
 
 def search_posts(db: Session, *, viewer: Viewer, query: Any = "", limit: Any = None) -> dict:
-    """按**标题**搜帖子,只搜已发布的。
+    """按**标题**搜帖子,只搜已发布的。查询词**留空 = 按发布时间列出最新的**。
 
     搜索**只搜 title,不搜 body**:对正文做 `ilike` 会把整篇正文连片段一起拖进上下文,
     而「标题里有这个词」已经足够定位。正文只在 `get_post` 里整篇取。
+
+    空查询为什么不再是错误:`_clean_query` 下面那段有完整来龙去脉 —— 只读已发布
+    这条**没有变**,留空只是去掉 LIKE 那个条件,`_published_only()` 照旧在。
     """
     q = _clean_query(query)
-    if not q:
-        return {"error": "搜索词为空"}
-    take = _limit(limit)
+    take = _list_limit(limit, q)
+    stmt = _published_only(select(BlogPost))
+    if q:
+        stmt = stmt.where(BlogPost.title.ilike(_like(q), escape="\\"))
     posts = db.scalars(
-        _published_only(select(BlogPost))
-        .where(BlogPost.title.ilike(_like(q), escape="\\"))
-        .order_by(BlogPost.published_at.desc(), BlogPost.id.desc())
-        .limit(take)
+        stmt.order_by(BlogPost.published_at.desc(), BlogPost.id.desc()).limit(take)
     ).all()
     names = _author_names(db, posts)
     tags = _post_tags(db, [p.id for p in posts])
+    likes = _post_like_counts(db, [p.id for p in posts])
     return {
         "count": len(posts),
         "results": [
@@ -392,6 +439,7 @@ def search_posts(db: Session, *, viewer: Viewer, query: Any = "", limit: Any = N
                 "author": names.get(p.author_id) or p.author_name,
                 "published_at": _iso(p.published_at),
                 "tags": tags.get(p.id, []),
+                "like_count": likes.get(p.id, 0),
                 "body_preview": _clip(p.body),
             }
             for p in posts
@@ -417,6 +465,10 @@ def get_post(db: Session, *, viewer: Viewer, post_id: Any = None) -> dict:
         "author": names.get(post.author_id) or post.author_name,
         "published_at": _iso(post.published_at),
         "tags": _post_tags(db, [post.id]).get(post.id, []),
+        # 点赞数(第五版那张 post_likes)。**公开数字**:界面上点赞按钮旁边就是这个,
+        # 所以它进模型上下文不增加任何可见性 —— 与模块头那条「注入拿到的本来就是
+        # 所有人可见的东西」一致。
+        "like_count": _post_like_counts(db, [post.id]).get(post.id, 0),
         "body": _clip(post.body, _DETAIL_CHARS),
     }
 
@@ -487,13 +539,20 @@ def _p(**props: dict) -> dict:
 
 
 _ID = {"type": "integer", "description": "记录 id"}
-_QUERY = {"type": "string", "description": "搜索关键词"}
-_LIMIT = {"type": "integer", "description": "最多返回几条,默认 5,上限 20"}
+# 「留空 = 列出最近的」写进 schema 描述里:模型看的是它,不是我们的报错。
+_QUERY = {"type": "string", "description": "搜索关键词;**留空 = 列出最近的记录**"}
+# 两个 limit 描述**分开写**,因为默认值本来就不同(搜索 5 / 留空 20,动态 10)。
+# 共用一个「默认 5」会让 recent_activity 那份是假的 —— 而模型读的就是这句话。
+_LIMIT = {"type": "integer", "description": "最多返回几条,默认 5,**关键词留空时默认 20**;上限 20"}
+_ACTIVITY_LIMIT = {"type": "integer", "description": "最多返回几条,默认 10,上限 30"}
 
 TOOLS: tuple[ToolSpec, ...] = (
     ToolSpec(
         name="search_products",
-        description="按名称搜索产品库。返回匹配产品的 id、状态、简介摘要。",
+        description=(
+            "按名称搜索产品库。返回匹配产品的 id、状态、简介摘要。"
+            "**关键词留空 = 按名称列出产品**(想「看看有哪些产品」时就这么用)。"
+        ),
         parameters=_p(query=_QUERY, limit=_LIMIT),
         run=search_products,
     ),
@@ -505,7 +564,10 @@ TOOLS: tuple[ToolSpec, ...] = (
     ),
     ToolSpec(
         name="search_requirements",
-        description="按需求描述搜索需求池。返回需求 id、进展状态、优先级、预计交付日期。",
+        description=(
+            "按需求描述搜索需求池。返回需求 id、进展状态、优先级、预计交付日期。"
+            "**关键词留空 = 按时间列出最新的需求**。"
+        ),
         parameters=_p(query=_QUERY, limit=_LIMIT),
         run=search_requirements,
     ),
@@ -517,13 +579,16 @@ TOOLS: tuple[ToolSpec, ...] = (
     ),
     ToolSpec(
         name="search_posts",
-        description="按标题搜索已发布的博客帖子。返回帖子 id、标题、作者、标签、正文摘要。",
+        description=(
+            "按标题搜索已发布的博客帖子。返回帖子 id、标题、作者、标签、点赞数、正文摘要。"
+            "**关键词留空 = 按发布时间列出最新的帖子**(想「站上有哪些帖子」时就这么用)。"
+        ),
         parameters=_p(query=_QUERY, limit=_LIMIT),
         run=search_posts,
     ),
     ToolSpec(
         name="get_post",
-        description="取一篇已发布博客帖子的完整正文。",
+        description="取一篇已发布博客帖子的完整正文(含点赞数)。",
         parameters=_p(post_id=_ID),
         run=get_post,
     ),
@@ -548,7 +613,7 @@ TOOLS: tuple[ToolSpec, ...] = (
     ToolSpec(
         name="recent_activity",
         description="最近的站内动态:谁在什么时候新建/修改/删除了什么。",
-        parameters=_p(limit=_LIMIT),
+        parameters=_p(limit=_ACTIVITY_LIMIT),
         run=recent_activity,
     ),
 )

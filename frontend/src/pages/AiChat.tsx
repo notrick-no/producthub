@@ -624,17 +624,14 @@ export default function AiChat() {
           body: { flex: 1, minHeight: 0, padding: 0, display: 'flex' },
         }}
       >
-        <Flex align="stretch" style={{ flex: 1, minWidth: 0, minHeight: 0 }}>
+        {/* 两列(窄屏改成上下)的布局在 index.css 的 .ai-body / .ai-conv-list / .ai-chat-pane。
+            ⚠️ **不要挪回这里当 inline style**:inline 会盖过那边的媒体查询,
+            390px 上消息区会被挤成一条缝(第七版联调量到的是 16px)。
+            也不用 antd 的 <Flex>:它的方向是运行时注入的类,和媒体查询同优先级,
+            谁赢看样式表插入顺序。 */}
+        <div className="ai-body">
           {/* 左列:会话列表。它自己滚 —— 会话攒多了不该把右边的面板一起顶长。 */}
-          <div
-            style={{
-              width: 240,
-              flex: 'none',
-              borderRight: '1px solid #f0f0f0',
-              padding: 8,
-              overflowY: 'auto',
-            }}
-          >
+          <div className="ai-conv-list">
             <Button
               block
               icon={<PlusOutlined />}
@@ -667,7 +664,7 @@ export default function AiChat() {
           </div>
 
           {/* 右列:消息流(唯一滚动容器)+ 输入框 */}
-          <Flex vertical style={{ flex: 1, minWidth: 0, minHeight: 0 }}>
+          <div className="ai-chat-pane">
             <div
               ref={scrollRef}
               onScroll={handleScroll}
@@ -721,8 +718,8 @@ export default function AiChat() {
                 </Typography.Text>
               </Flex>
             </div>
-          </Flex>
-        </Flex>
+          </div>
+        </div>
       </Card>
     </Flex>
   )
