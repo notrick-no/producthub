@@ -555,8 +555,9 @@ class AiMessageRead(BaseModel):
     `tool_trace` 在库里是 **JSON 文本**(见 models.AiMessage),这里解析成结构再给前端 ——
     前端不该知道它的存储格式,也不该自己 try/except 一个 json.parse。
 
-    `reasoning_content` 为 None = 当时协议里没有这个字段;空串是可能的(有但是空)。
-    前端两者都当「没有思考过程」渲染即可。
+    `reasoning_content` 为 None = 没有思考过程。第七版起**不会有空串**了
+    (换内核后不再需要向协议回传它,写入路径把空串统一转成 None,见 models.AiMessage)。
+    前端两者都当「没有思考过程」渲染即可 —— 这条约定没变,所以前端不用改。
     """
 
     model_config = ConfigDict(from_attributes=True)

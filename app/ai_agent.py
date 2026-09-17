@@ -1,4 +1,17 @@
-"""AI 工具循环(第六版 · A3)—— 把一次提问跑成一段可流式消费的事件序列。
+"""AI 工具循环(第七版 —— 内核换成 DeepSeek Harness)—— 把一次提问跑成事件序列。
+
+## 这个模块现在还剩下什么
+
+v6 里这个文件是**整个工具循环**:调模型、解析分片、攒 tool_calls、执行工具、
+回灌结果、数轮数、控时间。第七版把这些**全部交给 dsh**(见 `ai_harness.py`),
+于是这里只剩三件与内核无关的事:
+
+  1. **重放历史** —— 从 Postgres 还原成一段文本(`_compose_prompt`)。
+  2. **转发事件** —— 把 dsh 的事件转出去(dsh 的事件模型在 `ai_harness` 里)。
+  3. **落库** —— 把回答、思考、工具轨迹、token 数写回 `ai_messages`。
+
+留在**这个**文件而不是并进 `ai_harness`,是因为这三件事的契约是「前端的 7 种
+事件」和「`ai_messages` 的列」—— 换内核不该动它们,所以它们该待在离内核远的地方。
 
 ## 这个模块的产出是**事件**,不是回答
 
@@ -16,27 +29,30 @@
     {"type":"done",            "message_id":…, "usage":{…}}
     {"type":"error",           "detail":…}
 
-## 多轮回放:中间的工具轮次**不回放**(一个要说清楚的决定)
+## 多轮回放:中间的工具轮次**不回放**(v6 定下的,第七版仍然如此)
 
-带 `tool_calls` 的 assistant 消息,协议要求后面必须跟齐对应的 `role:"tool"` 消息,
-否则 400。要忠实回放就得再存一列 `tool_call_id` 和**每一条工具结果**(单条可达 3 万字,
-一次提问最多 18 条)——存储和每次请求的 token 都会成倍涨。
+v6 的理由是协议:带 `tool_calls` 的 assistant 消息后面必须跟齐对应的
+`role:"tool"` 消息,否则 400;要忠实回放就得再存一列 `tool_call_id` 和每一条
+工具结果(单条可达 3 万字),存储和 token 都成倍涨。
 
-所以 `_history()` 只还原**「用户提问 / 最终回答」两种消息**,中间轮次丢弃:
-最终答案里已经含着查到的事实,模型下一轮真的需要时**重新查一次**就好。
+第七版**理由变了但结论没变**:现在是「dsh 的会话不持久(见 `ai_harness` 模块头),
+历史由我们从 Postgres 重放」,所以同样只还原「用户提问 / 最终回答」两种消息。
+代价还是那两条:模型看不到自己上次是怎么查的,可能重复查一次;追问里对
+「上次那个数」可能表述不准。换来的是存储里没有任何协议内部结构。
 
-代价要认:模型看不到自己上次是怎么查的,可能重复查同一个东西(多花一次工具调用的钱),
-也可能在追问里对「上次那个数」表述得不够精确。这个代价我们接受 —— 换来的是
-「存储里没有任何协议内部结构」,回放逻辑因此不会随着协议细节变化而腐坏。
+⚠️ **v6 的「中间轮次」和 v7 的「中间轮次」不是一回事**:v6 是我们自己的循环轮,
+v7 是 dsh 的 step。但两者都落在「不落库」这一侧,所以行为对用户是一致的。
 
-## 上限:轮数 + 墙钟,两道都要有
+## 上限:v7 只剩墙钟一道
 
-只限轮数封不住时间(默认 `high` effort 下**一轮**就可能几十秒),只限时间又挡不住
-一个来回很快但疯狂调工具的循环。两个都设。
+v6 是「轮数 + 墙钟」两道(`MAX_ROUNDS` + `_wall_clock_budget`)。第七版
+**轮数那道没了** —— 跑几轮、什么时候收尾由 dsh 的 agent loop 决定,不归我们数。
+于是 `MAX_ROUNDS` 和它带来的那条「最后一轮不提供工具,逼模型就已有信息作答」
+的策略**一并失效**。这是换内核真实丢掉的东西,记在这里,没有偷偷抹掉。
 
-⚠️ 这里能给出真实的时间上界,靠的是**在 chunk 循环里也检查 deadline** ——
-`urlopen(timeout=N)` 是**每个 socket 操作**的超时,不是总时长;一个稳定吐字的响应
-永远碰不到它。真正的上界是 `预算 + 一次 socket 超时`(见 `_wall_clock_budget`)。
+墙钟那道还在,但**强度不如 v6**:到点我们只是不再往下消费,dsh 那一轮仍在跑
+(SDK 没有取消接口)。v6 能当场把上游连接关掉、立刻止血;v7 止不住,只能少花
+「后续轮次」的钱。见 `ai_harness.run_question` 里的说明。
 """
 import json
 import logging
@@ -47,7 +63,7 @@ from typing import Iterator
 
 from sqlalchemy import func, select, update
 
-from . import ai_client, ai_tools
+from . import ai_harness
 from .ai_tools import Viewer
 from .db import SessionLocal
 from .models import AiConversation, AiMessage
@@ -57,16 +73,15 @@ log = logging.getLogger("producthub.ai")
 # 北京时间。与 routers/ai.py 的 _CN_TZ 是同一条规则的两处落点(见 _today_cn 的说明)。
 _CN_TZ = timezone(timedelta(hours=8))
 
-# 一次提问最多几轮模型调用。**最后一轮不提供 tools**(见 stream_answer 里的注释),
-# 所以这就是「最多几次工具调用轮」+ 一次收尾。
-MAX_ROUNDS = 6
-
 # 写入前的长度上限。reasoning_content 通常比正文长得多,而 tool_trace 是无上界的
 # 结构 —— 不设上限它们会长成 ai_messages 最胖的两列(见 models.AiMessage)。
+#
+# ⚠️ v7 起**没有 `MAX_ROUNDS`** 了:一次提问跑几轮、什么时候收尾,由 dsh 的
+# agent loop 决定,不再由我们数。这是换内核换掉的东西之一 —— 那条「最后一轮
+# 不提供工具,好让模型就手里已有的东西作答」的策略也随之失效(它是我们手写
+# 循环才有的东西)。若要重新拿回这个上界,得在 dsh 的 profile 上配。
 _MAX_CONTENT_CHARS = 20000
 _MAX_REASONING_CHARS = 20000
-_TRACE_REASONING_CHARS = 1500
-_TRACE_PREVIEW_CHARS = 400
 
 # 超时/截断时追加在回答末尾的话。**必须进 content 也进库** ——
 # 否则一条被砍断的回答读起来像说完了,而它没有。
@@ -84,12 +99,20 @@ def _wall_clock_budget() -> float:
     是 2.7 秒),默认 effort 下思考也是轻的。一轮问答最多 6 次调用 ≈ 十几秒,
     120 秒是它的 5 倍以上余量。
 
-    真实上界是它 **加上一次 socket 超时**(AI_TIMEOUT,默认 60)—— 因为卡在 read
-    上的那一次没法中断。120 + 60 = **180 秒 = 3 分钟**,在 Railway 的 15 分钟窗口内
+    真实上界是它 **加上 1 秒** —— `ai_harness.run_question` 到点后 `thread.join(1.0)`
+    就往上返。所以 **121 秒**就是这次 HTTP 请求能挂多久,在 Railway 的 15 分钟窗口内
     (而且流式一直有数据,不会撞上「5 分钟无传输」那条)。
 
+    ⚠️ **第七版起这个说法里的第二项没了。** 旧注释写的是「加上一次 socket 超时
+    (AI_TIMEOUT,默认 60)」—— 那个环境变量已经在删 `ai_client` 时一起没了(没有任何
+    代码读它),而 dsh SDK 的 `request_timeout_seconds` 默认就是 `None`,意思是
+    **读上游不设截止时间**。所以现在只有一个上界,就是预算本身。
+
+    ⚠️ **而它管的是「我们等多久」,不是「花多少钱」。** 到点我们只是不再消费 dsh 的
+    事件,那一轮在后台照跑(SDK 没有取消接口,见 `ai_harness.run_question` 里的核实)。
+    所以这个值调小**不再安全**:以前调小 = 长回答被截,现在调小 = 截断的同时钱照花。
     超了不是失败:停下、把已有的内容作为回答给出,并注明「已到检索时间上限」
-    (见 `_TRUNCATED_NOTE`)。所以这个值调小是**安全**的,代价只是长回答可能被截。
+    (见 `_TRUNCATED_NOTE`)。
     """
     try:
         return float(os.getenv("AI_WALL_CLOCK_BUDGET", "120"))
@@ -110,15 +133,23 @@ _SYSTEM_PROMPT = """你是 producthub 的站内助手。producthub 是一个内�
 # ---------------------------------------------------------------- 历史重建
 
 def _history(conversation_id: int) -> list[dict]:
-    """把这个会话里**该回放的消息**还原成协议格式。
+    """把这个会话里**该回放的消息**还原出来。
 
     只取 user / assistant 两类,且**中间的工具轮次不留痕**(见模块头的决定)。
     `running` 的助手行被排除 —— 那正是本次要写的那一行。
 
-    `reasoning_content` 的 NULL 与 `''` 必须分辨着还原:
-      - NULL  → 当时协议里**没有这个字段** → 这里也**不放这个键**
-      - `''`  → 当时是空串 → 这里**原样放一个空串键**
-    两种都会踩到那个偶发 400(见 models.AiMessage 的长注释),不能合并。
+    ⚠️ **这里曾经会带 `reasoning_content`。** 第六版必须带:我们自己拼 HTTP 请求,
+    而 DeepSeek 在带 `tools` 时要求把历史轮次的 `reasoning_content` 一起回传,
+    漏了报 400 —— 所以 `NULL`(当时没这个字段)与 `''`(当时是空串)必须分辨着还原。
+
+    **第七版这条理由整段作废**:上游请求不再由我们发(见 `ai_harness` 模块头),
+    回传历史是 dsh 自己会话里的事。而这个键的**唯一**消费者是 `_compose_prompt`,
+    它只读 `role` 和 `content` —— 也就是说这个键一个读者都没有,删掉不改变任何行为。
+    留着它比删掉更糟:它看起来是承重的(我这次读代码时就被它骗过一轮),
+    而下一个读的人会以为自己不能动。
+
+    这个性质(思考过程不回放进提示词)仍有测试守着,见
+    `tests/test_ai_kernel.py::ComposePromptTests`。
 
     `failed` / `interrupted` 的助手行**也放进去**:它们的内容是
     「（回答生成失败）」这样的占位,放进去能保住 user/assistant 交替的结构。
@@ -135,13 +166,39 @@ def _history(conversation_id: int) -> list[dict]:
             .order_by(AiMessage.id)
         ).all()
 
-        messages: list[dict] = []
-        for row in rows:
-            entry: dict = {"role": row.role, "content": row.content or ""}
-            if row.role == "assistant" and row.reasoning_content is not None:
-                entry["reasoning_content"] = row.reasoning_content
-            messages.append(entry)
-        return messages
+        return [
+            {"role": row.role, "content": row.content or ""}
+            for row in rows
+        ]
+
+
+def _compose_prompt(history: list[dict]) -> str:
+    """把历史拼成**一段文本**,交给 dsh 当输入。
+
+    为什么要自己拼,而不是让 dsh 的会话记着(见 `ai_harness` 模块头的长说明):
+    Railway 的磁盘是易失的、部署可能是多副本,靠 `$DSH_HOME/sessions` 里的 JSONL
+    记上下文会出现「界面上历史还在,模型却忘了」。所以每次提问用独立会话,
+    历史从这里重放 —— Postgres 是唯一的真相来源。
+
+    ⚠️ **这是这次换内核最不漂亮的一处**:dsh 的 `run()` 只收文本或 content block,
+    没有「注入一条历史消息」的块类型,所以历史只能降级成文本。代价是模型分不清
+    「这是历史」和「这是用户说的」的边界,只能靠这层措辞。最后一条用户消息
+    **就是本次提问**(`_history` 在本次提问落库之后才读),所以它在末尾、
+    并用一行 `---` 隔开,好让模型知道「要回答的是最后这条」。
+
+    历史为空(首问)时不加任何包装 —— 那种情况下这几行提示纯属噪音。
+    """
+    if not history:
+        return ""
+    lines = [
+        "以下是本次对话此前的内容,供你参考。**不要复述它们**,只回答最后那一条。",
+        "",
+    ]
+    for message in history:
+        who = "用户" if message.get("role") == "user" else "助手"
+        lines.append(f"{who}:{message.get('content') or ''}")
+    lines += ["", "---", "", "以上是历史。请回答上面最后一条用户消息。"]
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------- 落库
@@ -206,30 +263,6 @@ def _finish(
         log.exception("AI 结果落库失败(message_id=%s)", assistant_message_id)
 
 
-# ---------------------------------------------------------------- 工具轨迹
-
-def _trace_preview(result: str) -> tuple[bool, str]:
-    """从包好标记的工具结果里取出给前端看的一小段。
-
-    返回 (成功与否, 预览)。成功与否靠**重新解析那段 JSON** 判断,而不是搜
-    `"error"` 子串 —— 产品简介里出现「error」这个词是完全可能的。
-    """
-    body = result
-    if body.startswith("<tool_result"):
-        body = body.split(">", 1)[-1]
-    if body.endswith(ai_tools.RESULT_CLOSE):
-        body = body[: -len(ai_tools.RESULT_CLOSE)]
-    body = body.strip()
-
-    ok = True
-    try:
-        payload = json.loads(body)
-        ok = not (isinstance(payload, dict) and "error" in payload)
-    except json.JSONDecodeError:
-        pass  # 解析不了就当作成功,预览照给 —— 这只是个展示用的标记
-    return ok, _clip_text(body, _TRACE_PREVIEW_CHARS)
-
-
 # ---------------------------------------------------------------- 主循环
 
 def stream_answer(
@@ -242,191 +275,84 @@ def stream_answer(
 ) -> Iterator[dict]:
     """跑完一次提问,逐个 yield 事件。**由 routers/ai.py 包成 SSE。**
 
-    端点必须是同步 `def`(见 routers/ai.py):这里用的是阻塞的 `urllib`,
-    由 Starlette 用线程池迭代这个生成器,不会碰事件循环。
+    第七版起,工具循环交给 DeepSeek Harness(见 `ai_harness` 模块头)。
+    这个函数只剩三件事:重放历史、把 dsh 的事件转出去、把结果落库。
 
-    `title` 非空表示这一问给会话起了名字(首问),随 `start` 事件带回前端。
-    `max_tokens` 来自管理员的设置(`ai_settings.max_tokens_per_call`),逐次调用都带上。
+    端点仍然必须是同步 `def`:`harness.run()` 是阻塞的,由 Starlette 用线程池
+    迭代这个生成器,不会碰事件循环 —— 和 v6 用阻塞 `urllib` 时是同一个理由。
+
+    ⚠️ **与 v6 最大的差别:没有逐字流式。** dsh 只在整条助手消息完成时才发
+    `assistant/message`,所以 `content_delta` 是**一整段**而不是一个字。
+    工具轨迹仍然是实时的(每个 tool/call 发生时就发)。这是换内核的代价,
+    已经确认接受。
+
+    `max_tokens` 走**实例级**配置:dsh 的 maxTokens 是 `AgentOptions` 的字段,
+    只在建 agent 那一刻生效,所以它被转交给 `ai_harness.run_question`,由实例池
+    在**起实例时**给进去(见 `ai_harness._start` 与 `_viewer_key`)。
+    与 v6 的差别:改了管理员设置之后,已经在池子里的旧实例不会立刻变 ——
+    因为 `max_tokens` 进了池子的键,下一次提问就会用新值起新实例,旧实例按
+    空闲超时退场。**不会出现「改了没生效」的静默状态。**
     """
     started = time.monotonic()
-    deadline = started + _wall_clock_budget()
+    yield {"type": "start", "message_id": assistant_message_id, "title": title}
 
-    # 系统提示放最前,后面接历史。**注意这是本次调用的请求历史,不是持久化的东西**:
-    # 循环里会往它追加带 tool_calls 的 assistant 消息和 role:"tool" 的结果,
-    # 那些**不落库**(见模块头「中间的工具轮次不回放」)。
-    messages = [{"role": "system", "content": build_system_prompt()}, *_history(conversation_id)]
-    trace: list[dict] = []
-    content_parts: list[str] = []
-    reasoning_parts: list[str] = []
-    # 「协议里出现过 reasoning_content 这个键」—— 与「它的值非空」是两回事。
-    # 一次都没有这个键 → 存 NULL;出现过但都是空串 → 存 ''。见 _history 的注释。
-    saw_reasoning_key = False
-    prompt_tokens = 0
-    completion_tokens = 0
-    truncated = False
+    outcome = None
+    # 边转发边攒一份。**这不是冗余**:客户端可能在 `_outcome` 到达之前就断开
+    # (GeneratorExit),那时 `outcome` 还是 None —— 不攒的话,已经推给用户看过的
+    # 内容会连同这次提问一起消失,而 token 已经花掉了。
+    streamed: list[str] = []
+    streamed_reasoning: list[str] = []
     status = "running"
     error: str | None = None
 
-    yield {"type": "start", "message_id": assistant_message_id, "title": title}
-
     try:
-        for round_no in range(1, MAX_ROUNDS + 1):
-            if time.monotonic() >= deadline:
-                truncated = True
-                break
+        # 历史由我们自己重放(理由见 ai_harness 模块头),所以这里**同时**决定了
+        # 输入内容;本次提问是历史里的最后一条。
+        prompt = _compose_prompt(_history(conversation_id))
+        # 每次提问一个**独立会话**:不能让 dsh 也记一份历史,否则我们重放的内容
+        # 会和它自己记得的叠加,同一个问题在上下文里出现两次。
+        session_id = f"conv{conversation_id}-msg{assistant_message_id}"
 
-            # 最后一轮**不提供工具**:模型不能再查了,只能就手里已有的东西作答。
-            # 这比「轮数用尽就停下」好得多 —— 后者会让用户拿到一句半截话,
-            # 而这里至少能得到一个完整的、承认信息不足的回答。多花的那一次调用
-            # 换来的是「上限触发时仍然可用」。
-            tools = ai_tools.TOOL_SCHEMAS if round_no < MAX_ROUNDS else None
+        for event in ai_harness.run_question(
+            viewer,
+            prompt=prompt,
+            session_id=session_id,
+            system_prompt=build_system_prompt(),
+            budget_seconds=_wall_clock_budget(),
+            max_tokens=max_tokens,
+        ):
+            if event["type"] == "_outcome":
+                outcome = event["outcome"]
+                continue
+            if event["type"] == "content_delta":
+                streamed.append(event["text"])
+            elif event["type"] == "reasoning_delta":
+                streamed_reasoning.append(event["text"])
+            yield event
 
-            round_reasoning: list[str] = []
-            round_content: list[str] = []
-            round_had_reasoning_key = False
-            # index → {"id","name","arguments"}:参数是**分片**到达的,必须按 index 攒
-            calls: dict[int, dict] = {}
-
-            chunks = ai_client.stream(messages, tools, max_tokens=max_tokens)
-            try:
-                for chunk in chunks:
-                    if time.monotonic() >= deadline:
-                        truncated = True
-                        break
-
-                    usage = ai_client.usage_of(chunk)
-                    if usage:
-                        prompt_tokens += usage.get("prompt_tokens") or 0
-                        completion_tokens += usage.get("completion_tokens") or 0
-
-                    for choice in chunk.get("choices") or []:
-                        delta = choice.get("delta") or {}
-
-                        if "reasoning_content" in delta:
-                            round_had_reasoning_key = True
-                            thought = delta.get("reasoning_content") or ""
-                            if thought:
-                                reasoning_parts.append(thought)
-                                round_reasoning.append(thought)
-                                yield {"type": "reasoning_delta", "text": thought}
-
-                        text = delta.get("content")
-                        if text:
-                            content_parts.append(text)
-                            round_content.append(text)
-                            yield {"type": "content_delta", "text": text}
-
-                        for call in delta.get("tool_calls") or []:
-                            index = call.get("index", 0)
-                            slot = calls.setdefault(
-                                index, {"id": None, "name": None, "arguments": ""}
-                            )
-                            if call.get("id"):
-                                slot["id"] = call["id"]
-                            function = call.get("function") or {}
-                            if function.get("name"):
-                                slot["name"] = function["name"]
-                            if function.get("arguments"):
-                                slot["arguments"] += function["arguments"]
-            finally:
-                # 提前 break(超时)或抛异常时,把上游连接关掉 ——
-                # 不关的话生成会继续跑,钱照花,而我们不再读了。
-                chunks.close()
-
-            saw_reasoning_key = saw_reasoning_key or round_had_reasoning_key
-
-            if not calls:
-                # 没有工具调用 → 这一轮就是最终答案。**靠 tool_calls 推进,不靠
-                # finish_reason** —— 后者的取值不在 DeepSeek 的文档里。
-                break
-
-            # 把这一轮原样回灌进请求历史:带 tool_calls 的 assistant 消息,
-            # 后面必须跟齐每个 tool_call_id 对应的 tool 消息,少一条就 400。
-            assistant_echo: dict = {
-                "role": "assistant",
-                "content": "".join(round_content),
-            }
-            if round_had_reasoning_key:
-                # 连空串也要带。这是那个「看着偶发」的 400 的根源:
-                # 服务端热着的时候容忍,冷回放才硬失败。
-                assistant_echo["reasoning_content"] = "".join(round_reasoning)
-            ordered = sorted(calls.items())
-            assistant_echo["tool_calls"] = [
-                {
-                    # id 理论上一定给,真没给就编一个 —— 但**两个地方必须用同一个**,
-                    # 所以先造好再同时喂给 assistant 消息和 tool 消息。
-                    "id": slot["id"] or f"call_{round_no}_{index}",
-                    "type": "function",
-                    "function": {
-                        "name": slot["name"] or "",
-                        "arguments": slot["arguments"] or "{}",
-                    },
-                }
-                for index, slot in ordered
-            ]
-            messages.append(assistant_echo)
-
-            round_trace = {
-                "round": round_no,
-                "reasoning": _clip_text("".join(round_reasoning), _TRACE_REASONING_CHARS),
-                "calls": [],
-            }
-
-            # 直接遍历刚建好的 tool_calls —— 它与 `ordered` 同序,所以
-            # assistant 消息里的 id 与下面 tool 消息里的 tool_call_id 必然一致。
-            for payload in assistant_echo["tool_calls"]:
-                name = payload["function"]["name"]
-                try:
-                    args = json.loads(payload["function"]["arguments"])
-                except json.JSONDecodeError:
-                    args = {}
-                if not isinstance(args, dict):
-                    args = {}
-
-                yield {"type": "tool", "name": name, "args": args}
-
-                # 每个工具一个**短命会话**,用完即关 —— 工具跑的时候不占请求级的连接,
-                # 也不占其他工具的时间。这是「把连接还回池子」那条改动的落点。
-                with SessionLocal() as db:
-                    result = ai_tools.run_tool(db, name, args, viewer=viewer)
-
-                ok, preview = _trace_preview(result)
-                round_trace["calls"].append(
-                    {"name": name, "args": args, "ok": ok, "preview": preview}
-                )
-                # **只发预览**:完整的工具结果是模型上下文,不是界面内容。
-                yield {"type": "tool_result", "name": name, "ok": ok, "preview": preview}
-
-                messages.append(
-                    {"role": "tool", "tool_call_id": payload["id"], "content": result}
-                )
-
-            trace.append(round_trace)
-
-        if truncated:
-            content_parts.append(_TRUNCATED_NOTE)
+        if outcome is None:  # pragma: no cover —— run_question 保证会给
+            raise RuntimeError("dsh 没有交出结果")
+        if outcome.truncated:
+            # ⚠️ **必须并进 content,不能只发事件。** 只在流里标一句的话,
+            # 重开页面就看不出来这条回答没写完 —— 而它读起来像是说完了。
+            # (`_TRUNCATED_NOTE` 的注释里写着这条要求,这里以前没做到。)
+            outcome.content += _TRUNCATED_NOTE
             yield {"type": "content_delta", "text": _TRUNCATED_NOTE}
-
-        status = "done"
+        if outcome.error:
+            status = "failed"
+            error = outcome.error
+            yield {"type": "error", "detail": "生成回答时出错，请稍后重试"}
+        else:
+            status = "done"
 
     except GeneratorExit:
         # 客户端断开(关标签页 / 点了停止)。**必须重新抛出** —— 吞掉它会让
         # close() 报 "generator ignored GeneratorExit"。
-        # 已经生成的 token 仍然落库(finally 里):钱是用户在出的,关掉页面不该
+        # 已经生成的内容仍然落库(finally 里):钱是用户在出的,关掉页面不该
         # 让这笔账消失,也不该让这次提问在库里无声无息。
         status = "interrupted"
         error = "客户端断开连接"
         raise
-
-    except ai_client.AiNotConfigured as exc:
-        status = "failed"
-        error = "AI 未配置"
-        yield {"type": "error", "detail": str(exc)}
-
-    except ai_client.AiCallError as exc:
-        status = "failed"
-        error = exc.detail
-        yield {"type": "error", "detail": f"AI 调用失败：{exc.detail}"}
 
     except Exception as exc:  # noqa: BLE001 —— 兜住一切,但留下完整日志
         log.exception("AI 回答生成异常")
@@ -440,22 +366,31 @@ def stream_answer(
             status = "failed"
             error = error or "未知原因中断"
 
+        # `outcome is None` = 内核那一轮没跑完(客户端断开 / 异常)。
+        # 这时用**边转发边攒**的那一份,别让已经生成的内容凭空消失。
+        content = outcome.content if outcome is not None else "".join(streamed)
+        # 空串与 NULL 的区别要保住:我们**完全没拿到** reasoning 就存 NULL
+        # (界面靠这个区分「没有思考过程」和「有但是空的」)。
+        reasoning = (
+            outcome.reasoning if outcome is not None else "".join(streamed_reasoning)
+        )
+
         _finish(
             assistant_message_id,
-            content="".join(content_parts),
+            content=content,
             reasoning=(
-                _clip_text("".join(reasoning_parts), _MAX_REASONING_CHARS)
-                if saw_reasoning_key
-                else None
+                _clip_text(reasoning, _MAX_REASONING_CHARS) if reasoning else None
             ),
-            trace=trace,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
+            trace=(outcome.trace if outcome is not None else []),
+            prompt_tokens=(outcome.prompt_tokens if outcome is not None else 0),
+            completion_tokens=(outcome.completion_tokens if outcome is not None else 0),
             status=status,
             error=error,
         )
 
     if status == "done":
+        prompt_tokens = outcome.prompt_tokens if outcome else 0
+        completion_tokens = outcome.completion_tokens if outcome else 0
         yield {
             "type": "done",
             "message_id": assistant_message_id,
@@ -466,7 +401,6 @@ def stream_answer(
                 "elapsed_ms": int((time.monotonic() - started) * 1000),
             },
         }
-
 
 def build_system_prompt() -> str:
     """系统提示。单独一个函数是为了让测试能直接断言它(比如「声明了工具结果是数据」)。"""

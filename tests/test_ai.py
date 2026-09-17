@@ -1,28 +1,44 @@
-"""AI 问答(第六版):工具只读边界、流式、多轮回放、配额。
+"""AI 问答(第七版):工具只读边界、SSE、落库、配额。
 
-## 假上游怎么造
+## 假内核怎么造(第七版换过的地方)
 
-照 tests/test_mailer.py 的先例:`mock.patch.object(ai_client.urllib.request, "urlopen", …)`。
-(这就是 ai_client 里必须写 `import urllib.request` 而不能 `from urllib.request import urlopen`
-的原因 —— 后者会让 patch 无对象可指,测试会**静默地打真网络**。)
+第六版这里假的是**网络**:`mock.patch.object(ai_client.urllib.request, "urlopen", …)`,
+用一串 SSE 分片冒充 DeepSeek。第七版内核换成了 DeepSeek Harness,`ai_client` 整个
+删掉了,我们这边**不再有 HTTP 请求体**可断 —— 所以注入点移到
+`ai_harness.run_question`(见 `_FakeKernel`)。
 
-假上游是**响应队列**:每次 urlopen 消费队首的一"轮",同时把请求体记下来。
-两个方向都断言 —— 只看响应的话,「草稿被送进了模型」这种 bug 是看不出来的,
-因为模型很可能压根没在回答里提它。**断在请求上,才证明工具根本没拿到那份数据。**
+⚠️ **假内核仍然去跑真的工具层**(`ai_mcp_server._call_tool`)。这不是为了省事:
+本文件最重要的一条性质是「草稿进不了模型上下文」,而真机上那个观测点是
+「模型收到的每一个字」——系统提示 + 提示词 + 每一次工具返回。把工具层也一起伪造掉,
+那条断言就退化成「我自己编的字符串里没有草稿」,**永远通过**。
+v6 的注释里那句「断在请求上,才证明工具根本没拿到那份数据」说的就是这个,
+换内核换掉的是断点的位置,不是这条理由。
 
-## 最重要的一条
+所以 `_FakeKernel.model_input()` 是泄露类断言**唯一**该用的取数口:
+它把模型这一轮能看到的全部文字拼起来。
 
-`test_second_question_replays_reasoning_from_db`:同一个会话里问第二次。
-第二次是**一个全新的 HTTP 请求**,进程内存里什么都没有 —— reasoning 只能从
-`ai_messages` 里读回来。这条钉住的是 `reasoning_content` 那一列存在的全部理由;
-它挂了就说明「看着偶发、其实是冷回放必现」的那个 400 会回来。
+## 已经不在这个文件里的东西(不是漏了)
+
+换内核真实丢掉的行为,连同它们的测试一并删掉,列在这里以免被当成漏测:
+
+  - `test_last_round_gets_no_tools_so_it_must_answer` —— 「最后一轮不提供工具」
+    是我们手写循环才有的策略,现在跑几轮归 dsh 的 agent loop 管(见 `ai_agent`
+    模块头)。上界只剩墙钟一道。
+  - `test_exhausted_budget_stops_before_calling_upstream` —— v7 **没有**开跑前的
+    预算检查,预算耗尽也照样起 dsh 那一轮。墙钟只是让我们**不再往下消费**,
+    止不住已经花出去的钱(见 `ai_harness.run_question`)。
+  - `test_tool_arguments_are_reassembled_from_fragments` —— SSE 分片拼参数是 dsh
+    的活了;等价的断言(真机抓到的 `arguments` 是 JSON 字符串)在
+    `test_ai_kernel.py::TranslationTests` 里。
+  - `test_max_tokens_setting_reaches_the_request` —— 名字换了:
+    `test_max_tokens_setting_reaches_the_kernel`。dsh 的 maxTokens 是**实例级**
+    配置,不是每次调用给的,所以它到达的位置是 `DeepSeekHarness(max_tokens=…)`
+    而不是 HTTP 请求体 —— 断言的位置变了,这条性质没有丢。
 """
 import contextlib
 import dataclasses
-import io
 import json
 import os
-import time
 import unittest
 from types import SimpleNamespace
 from unittest import mock
@@ -31,136 +47,145 @@ from base import ApiTestCase, _ADMIN_EMAIL
 
 from sqlalchemy import select
 
-from app import ai_agent, ai_client, ai_tools
+from app import ai_agent, ai_harness, ai_mcp_server, ai_tools
 from app.db import SessionLocal
 from app.models import AiConversation, AiMessage, AiSettings, User
-from app.schemas import DEFAULT_MAX_TOKENS_PER_CALL
 
 # 覆盖掉跑测试那台机器上可能存在的同名变量。`clear=False` 是刻意的:
 # 只钉住这几个,别的(比如 PATH)不动。
+#
+# 第七版起 `DEEPSEEK_API_KEY` 的作用只剩「让 is_ai_configured() 为真」(门禁与
+# /status),`AI_MODEL` / `AI_BASE_URL` 由 ai_harness 的 /status 读 —— 它们**不会**
+# 真的上网:内核整个被 `_FakeKernel` 换掉了。
 _AI_ENV = {
     "DEEPSEEK_API_KEY": "sk-test-key",
     "AI_MODEL": "deepseek-flash",
     "AI_BASE_URL": "https://api.deepseek.test",
     "AI_WALL_CLOCK_BUDGET": "240",
-    "AI_REASONING_EFFORT": "",  # 空 = 不发送(默认值),见 ai_client._build_payload
 }
 
 
-# ---------------------------------------------------------------- 假上游
+# ---------------------------------------------------------------- 假内核
 
-class _FakeResponse:
-    """urlopen 的返回值:一行行 SSE 字节。
+def call(name: str, args: dict | None = None, *, reasoning: str = "") -> tuple:
+    """脚本一步:模型调用一个工具。"""
+    return ("tool", name, args or {}, reasoning)
 
-    延迟发生在**迭代时**而不是造数据时 —— 这很重要:`stream_answer` 的墙钟检查
-    就在 `for chunk in chunks` 的循环体里,只有边迭代边耗时才测得到它。
-    造数据时睡完的话,所有延迟都落在 urlopen 之前,那是另一个场景。
+
+def say(text: str, *, reasoning: str = "", usage: tuple[int, int] = (10, 5)) -> tuple:
+    """脚本一步:模型说一段话。
+
+    可以是最终回答,也可以是调工具前的开场白(「我来查一下」)—— 真机上两者
+    都是独立的 `assistant/message`,所以模型会分两次说。
+    """
+    return ("answer", text, reasoning, usage)
+
+
+def explode(detail: str = "RuntimeError: 内核炸了") -> tuple:
+    """脚本一步:内核这一轮失败(`outcome.error`)。"""
+    return ("fail", detail)
+
+
+class _FakeKernel:
+    """站在 dsh 的位置 —— 但**真的去跑我们的工具层**。
+
+    为什么工具是真的:见模块头。`_call_tool` 就是 MCP 子进程里跑的那个函数,
+    身份用**提问者本人**的 viewer —— 于是「模型能看到的字节」在测试里和在线上
+    走的是同一条路径,而不是两条。
     """
 
-    def __init__(self, lines: list[bytes], *, delay_after: int = 0, delay: float = 0.0):
-        self._lines = lines
-        self._delay_after = delay_after
-        self._delay = delay
+    def __init__(self, script: list[tuple] | None = None, *, truncated: bool = False):
+        self.script = list(script or [])
+        self.truncated = truncated
+        self.runs: list[dict] = []
 
-    def __iter__(self):
-        for position, line in enumerate(self._lines):
-            if self._delay and position >= self._delay_after:
-                time.sleep(self._delay)
-            yield line
+    # ---- 被 patch 到 ai_harness.run_question 上的那个函数 ----
+    def run_question(
+        self,
+        viewer,
+        *,
+        prompt,
+        session_id,
+        system_prompt,
+        budget_seconds=None,
+        max_tokens=None,
+    ):
+        run = {
+            "viewer": viewer, "prompt": prompt, "session_id": session_id,
+            "system_prompt": system_prompt, "budget_seconds": budget_seconds,
+            "max_tokens": max_tokens,
+            "tool_outputs": [],
+        }
+        self.runs.append(run)
 
-    def read(self) -> bytes:
-        return b"".join(self._lines)
+        outcome = ai_harness.TurnOutcome()
+        for step_no, step in enumerate(self.script, start=1):
+            kind = step[0]
 
-    def close(self) -> None:
-        pass
+            if kind == "tool":
+                _, name, args, reasoning = step
+                if reasoning:
+                    outcome.reasoning += reasoning
+                    yield {"type": "reasoning_delta", "text": reasoning}
+                yield {"type": "tool", "name": name, "args": args}
 
+                # ← 真工具,真身份,真的查询。工具的失败由 run_tool 收敛成信封。
+                text = ai_mcp_server._call_tool(viewer, name, args)["content"][0]["text"]
+                run["tool_outputs"].append(text)
+                ok, preview = ai_harness._preview(text)
+                outcome.trace.append({
+                    "round": step_no,
+                    "reasoning": reasoning,
+                    "calls": [{"name": name, "args": args, "ok": ok, "preview": preview}],
+                })
+                yield {"type": "tool_result", "name": name, "ok": ok, "preview": preview}
 
-def _sse_line(chunk: dict) -> bytes:
-    return f"data: {json.dumps(chunk, ensure_ascii=False)}\n".encode("utf-8")
+            elif kind == "answer":
+                _, text, reasoning, (prompt_tokens, completion_tokens) = step
+                if reasoning:
+                    outcome.reasoning += reasoning
+                    yield {"type": "reasoning_delta", "text": reasoning}
+                # 真机也是**累积**:模型在调工具前说的那句也在 final_response 之外
+                # (见 ai_harness 的 worker),所以这里 += 而不是 =
+                outcome.content += text
+                outcome.prompt_tokens += prompt_tokens
+                outcome.completion_tokens += completion_tokens
+                yield {"type": "content_delta", "text": text}
 
+            elif kind == "fail":
+                outcome.error = step[1]
 
-def _sse(chunks: list[dict], **kwargs) -> _FakeResponse:
-    lines = [_sse_line(c) for c in chunks]
-    lines.append(b"data: [DONE]\n")
-    return _FakeResponse(lines, **kwargs)
-
-
-def _delta(**fields) -> dict:
-    return {"choices": [{"delta": fields}]}
-
-
-def _usage(prompt: int = 10, completion: int = 5) -> dict:
-    return {"choices": [], "usage": {"prompt_tokens": prompt, "completion_tokens": completion}}
-
-
-def _text_turn(text: str, reasoning: str | None = None, **kwargs) -> _FakeResponse:
-    """一轮纯文本回答(= 最终答案)。"""
-    chunks = []
-    if reasoning is not None:
-        # 刻意**切成两片**发 —— 真实响应里 reasoning 是跨 chunk 累积的,
-        # 一次给整段就测不出「累积」这件事。
-        chunks.append(_delta(reasoning_content=reasoning[:1]))
-        chunks.append(_delta(reasoning_content=reasoning[1:]))
-    chunks.append(_delta(content=text))
-    chunks.append(_usage())
-    return _sse(chunks, **kwargs)
-
-
-def _tool_turn(
-    name: str, arguments: str, reasoning: str | None = None, *, pieces: int = 1
-) -> _FakeResponse:
-    """一轮工具调用。`pieces` 控制把 arguments 切成几段发 —— 真实响应就是碎的。"""
-    chunks = []
-    if reasoning is not None:
-        chunks.append(_delta(reasoning_content=reasoning))
-    size = max(1, len(arguments) // max(1, pieces))
-    parts = [arguments[i : i + size] for i in range(0, len(arguments), size)] or [""]
-    for position, part in enumerate(parts):
-        call: dict = {"index": 0, "function": {"arguments": part}}
-        if position == 0:
-            # id 与 name 只出现在第一片上,后面几片只有 arguments(真实形状就是这样)
-            call["id"] = "call_1"
-            call["type"] = "function"
-            call["function"]["name"] = name
-        chunks.append(_delta(tool_calls=[call]))
-    chunks.append(_usage())
-    return _sse(chunks)
-
-
-class _FakeDeepSeek:
-    """响应队列 + 请求记录器。"""
-
-    def __init__(self, turns: list[_FakeResponse]):
-        self.turns = list(turns)
-        self.requests: list[dict] = []
-
-    def urlopen(self, req, timeout=None):  # noqa: ARG002 —— 签名要跟真的一样
-        payload = json.loads(req.data.decode("utf-8"))
-        self.requests.append(payload)
-        if not self.turns:
-            raise AssertionError(
-                f"假上游被调用了第 {len(self.requests)} 次,但队列里已经没有响应了 —— "
-                "测试给的轮数少于实际发生的轮数"
-            )
-        return self.turns.pop(0)
+        outcome.truncated = self.truncated
+        outcome.finish_reason = "completed"
+        yield {"type": "_outcome", "outcome": outcome}
 
     # ---- 断言用的取数口 ----
-    def messages_of(self, index: int) -> list[dict]:
-        return self.requests[index]["messages"]
+    def model_input(self, index: int = 0) -> str:
+        """**模型这一轮能看到的全部文字。**泄露类断言一律断在这个上。
 
-    def all_text(self) -> str:
-        """所有请求体的全文 —— 「某段内容有没有被送出去」就断言这个。"""
-        return json.dumps(self.requests, ensure_ascii=False)
+        系统提示 + 提示词 + 每一次工具的返回 —— 少一样就少一个泄露面。
+        """
+        run = self.runs[index]
+        return "\n".join([run["system_prompt"], run["prompt"], *run["tool_outputs"]])
+
+    @property
+    def prompts(self) -> list[str]:
+        return [run["prompt"] for run in self.runs]
+
+    @property
+    def session_ids(self) -> list[str]:
+        return [run["session_id"] for run in self.runs]
 
 
 class AiTestBase(ApiTestCase):
-    """带假上游的基类。所有 AI 用例都从这儿起。"""
+    """带假内核的基类。所有 AI 用例都从这儿起。"""
 
     @contextlib.contextmanager
-    def fake_ai(self, turns: list[_FakeResponse], env: dict | None = None):
-        fake = _FakeDeepSeek(turns)
+    def fake_ai(self, script: list[tuple] | None = None, env: dict | None = None,
+                *, truncated: bool = False):
+        fake = _FakeKernel(script, truncated=truncated)
         with (
-            mock.patch.object(ai_client.urllib.request, "urlopen", fake.urlopen),
+            mock.patch.object(ai_harness, "run_question", fake.run_question),
             mock.patch.dict(os.environ, {**_AI_ENV, **(env or {})}, clear=False),
         ):
             yield fake
@@ -172,9 +197,9 @@ class AiTestBase(ApiTestCase):
 
     @contextlib.contextmanager
     def ai_env(self, **overrides):
-        """只配好环境、**不造假上游**。
+        """只配好环境、**不造假内核**。
 
-        用于「应该在开流之前就被拒绝」的那一类用例 —— 它们根本走不到发请求那一步
+        用于「应该在开流之前就被拒绝」的那一类用例 —— 它们根本走不到起内核那一步
         (配额、开关这些检查都排在 `is_ai_configured()` 之后),
         所以要让它们测到 429/403 而不是 503,环境里必须有一个 key。
         """
@@ -209,6 +234,25 @@ class AiTestBase(ApiTestCase):
     def admin_user(self) -> User:
         with SessionLocal() as db:
             return db.scalars(select(User).where(User.email == _ADMIN_EMAIL)).one()
+
+    def admin_patch_ai_settings(self, max_tokens_per_call: int | None = None, **fields):
+        """管理员改 AI 设置。`PUT` 收的是**整个**设置体(不是 patch),所以这里要补齐。
+
+        只给 `max_tokens_per_call` 时其余字段用库里的现值,免得每条用例都要重复
+        一串与本用例无关的数字。
+        """
+        body = {
+            "enabled": True,
+            "monthly_token_budget": None,
+            "daily_questions_per_user": 20,
+            "max_tokens_per_call": 4096,
+        }
+        body.update(fields)
+        if max_tokens_per_call is not None:
+            body["max_tokens_per_call"] = max_tokens_per_call
+        r = self.client.put("/api/ai/settings", json=body)
+        self.assertEqual(r.status_code, 200, r.text)
+        return r
 
 
 def _events(response) -> list[dict]:
@@ -361,161 +405,185 @@ class AiAskTests(AiTestBase):
     def test_draft_never_reaches_the_model(self):
         """**本文件最重要的一条。**
 
-        断在**请求体**上,而不是只断响应。员工与管理员各问一次:模型的上下文里
-        都不该出现那篇草稿。管理员那一半尤其重要 —— 他在界面上看得到草稿,
-        所以「AI 也看得到」是一个很自然的错误实现。
+        断在「模型这一轮能看到的全部文字」上(`fake.model_input()`):系统提示 +
+        提示词 + 每一次工具的返回。员工与管理员各问一次,两个身份下都不该出现那篇
+        草稿。管理员那一半尤其重要 —— 他在界面上看得到草稿,所以「AI 也看得到」
+        是一个很自然的错误实现。
 
-        草稿标题刻意**也包含搜索词**,否则搜索本来就不会命中它,这条断言等于没测。
+        **阳性对照不是装饰。** 旧版这条靠「请求体里没有草稿」来证明;换内核后那个
+        观测点没了,如果不先证明「已发布的帖子确实被搜到了」,一个彻底坏掉的工具
+        (什么都搜不到)也能让安全断言变绿 —— 那正是这个文件差点掉进去的坑。
         """
-        self.new_post(title="公开的帖子", status="published")
-        self.new_post(title="机密的草稿帖子", status="draft")
+        self.new_post(title="公开的帖子", status="published", body="公开正文:蓝色礁石")
+        draft = self.new_post(title="机密的草稿帖子", status="draft", body="草稿正文:紫色潮汐")
 
         for role in ("employee", "admin"):
             with self.subTest(role=role):
                 client = self.client if role == "admin" else self.user_client("d@test.local")
                 conversation = self.new_ai_conversation(client=client)
-                turns = [
-                    _tool_turn("search_posts", json.dumps({"query": "帖子"}), "查一下"),
-                    _text_turn("站内有一篇公开的帖子。", "整理"),
+                script = [
+                    # 搜索命中两篇标题(草稿标题里**也有**搜索词,否则这条断言等于没测)
+                    call("search_posts", {"query": "帖子"}),
+                    # 再直取一次草稿 id —— 覆盖「不搜、直接按 id 拿」这条路
+                    call("get_post", {"post_id": draft["id"]}),
+                    say("站内有一篇公开的帖子。"),
                 ]
-                with self.fake_ai(turns) as fake:
+                with self.fake_ai(script) as fake:
                     events, _ = self.ask(conversation["id"], "站内有哪些帖子?", client=client)
 
                 self.assertIn("done", _types(events))
-                sent = fake.all_text()
-                self.assertIn("公开的帖子", sent, "已发布的应该被搜到")
-                self.assertNotIn("机密的草稿帖子", sent, f"{role} 提问时草稿进了模型上下文 —— 泄露")
+                seen = fake.model_input()
 
-    def test_second_question_replays_reasoning_from_db(self):
-        """多轮:第二次提问是**全新的 HTTP 请求**,reasoning 只能从库里读回来。
+                # 阳性对照:已发布的确实看得见
+                self.assertIn("公开的帖子", seen, "已发布的帖子该被搜到 —— 工具坏了")
+                self.assertIn("蓝色礁石", seen, "已发布的**正文**该拿得到 —— 工具坏了")
+                # 安全断言:草稿的标题和正文都不能进上下文
+                self.assertNotIn("机密的草稿帖子", seen,
+                                 f"{role} 提问时草稿**标题**进了模型上下文 —— 泄露")
+                self.assertNotIn("紫色潮汐", seen,
+                                 f"{role} 提问时草稿**正文**进了模型上下文 —— 泄露")
 
-        这条钉住的是 `ai_messages.reasoning_content` 那一列存在的全部理由。
+    def test_second_question_replays_the_previous_answer(self):
+        """多轮:第二次提问是**全新的 HTTP 请求**,上一次的问答只能从库里读回来。
+
+        内核那边每次都是**独立会话**(见 `ai_harness` 模块头),所以「模型还记得
+        上一轮」这件事完全靠我们重放。这条挂了,表现就是「界面上历史都在,模型
+        却失忆」。
         """
         conversation = self.new_ai_conversation()
-        with self.fake_ai([_text_turn("第一次的回答。", "第一轮的思考过程")]):
+        with self.fake_ai([say("第一次的回答。", reasoning="第一轮的思考过程")]):
             events, _ = self.ask(conversation["id"], "第一个问题")
         self.assertIn("done", _types(events))
 
-        with self.fake_ai([_text_turn("第二次的回答。", "第二轮的思考过程")]) as fake:
+        with self.fake_ai([say("第二次的回答。")]) as fake:
             self.ask(conversation["id"], "第二个问题")
 
-        assistants = [m for m in fake.messages_of(0) if m["role"] == "assistant"]
-        self.assertEqual(len(assistants), 1, "第一轮的最终回答应该被回放")
-        self.assertEqual(assistants[0]["content"], "第一次的回答。")
-        self.assertEqual(
-            assistants[0].get("reasoning_content"),
-            "第一轮的思考过程",
-            "历史里的 reasoning_content 丢了 —— 带 tools 时这就是那个 400",
-        )
+        prompt = fake.prompts[0]
+        self.assertIn("第一个问题", prompt, "上一次的提问要回放")
+        self.assertIn("第一次的回答。", prompt, "上一次的回答要回放")
+        self.assertIn("第二个问题", prompt, "本次提问当然要在")
 
-    def test_empty_reasoning_is_replayed_as_empty_string(self):
-        """NULL 与 '' 必须分辨着回放:一个是「没这个字段」,一个是「有但是空」。"""
+    def test_reasoning_is_not_replayed_into_the_prompt(self):
+        """**v7 的行为变化,写下来免得被当成 bug。**
+
+        v6 要把 `reasoning_content` 原样回放 —— 协议要求带 `tool_calls` 的助手
+        消息后面跟齐 `tool` 消息,漏了 reasoning 会偶发 400。
+
+        v7 没有这个问题了:提示词是我们自己拼的一段文本,没有任何协议结构。
+        而把 reasoning 拼进去反而是**有害**的(见 `test_ai_kernel` 里那条):
+        它的措辞是给模型自己看的,塞进对话文本等于把「当时的思考」伪装成
+        「说过的话」。所以这一版刻意不回放。
+
+        内容仍然**存在库里**(ThoughtChain 要显示),只是不进提示词。
+        """
         conversation = self.new_ai_conversation()
-        with self.fake_ai([_text_turn("回答。", "")]):
-            self.ask(conversation["id"], "问题")
+        with self.fake_ai([say("第一次的回答。", reasoning="内部思考:先查产品表")]):
+            self.ask(conversation["id"], "第一个问题")
 
-        self.assertEqual(self.answers(conversation["id"])[0].reasoning_content, "")
+        with self.fake_ai([say("第二次的回答。")]) as fake:
+            self.ask(conversation["id"], "第二个问题")
 
-        with self.fake_ai([_text_turn("第二个回答。", "有思考")]) as fake:
-            self.ask(conversation["id"], "追问")
-        assistant = next(m for m in fake.messages_of(0) if m["role"] == "assistant")
-        self.assertIn("reasoning_content", assistant, "空串也要带上这个键")
-        self.assertEqual(assistant["reasoning_content"], "")
+        self.assertNotIn("内部思考", fake.prompts[0])
+        # 但库里要有 —— 界面上那条思考链就是从这一列来的
+        self.assertEqual(self.answers(conversation["id"])[0].reasoning_content,
+                         "内部思考:先查产品表")
 
-    def test_absent_reasoning_stays_absent(self):
-        """协议里压根没有这个字段时,回放也不能凭空造一个键出来。"""
+    def test_reasoning_is_accumulated_across_blocks_and_stored(self):
+        """模型会分几条消息说(reasoning 一条、正文一条、调工具前再一条),都要累积。"""
         conversation = self.new_ai_conversation()
-        with self.fake_ai([_text_turn("回答。", None)]):
-            self.ask(conversation["id"], "问题")
-
-        self.assertIsNone(self.answers(conversation["id"])[0].reasoning_content)
-
-        with self.fake_ai([_text_turn("第二个回答。", None)]) as fake:
-            self.ask(conversation["id"], "追问")
-        assistant = next(m for m in fake.messages_of(0) if m["role"] == "assistant")
-        self.assertNotIn("reasoning_content", assistant)
-
-    def test_tool_arguments_are_reassembled_from_fragments(self):
-        """工具参数是分片到达的 —— 不按 index 累积就 json.loads 不了。"""
-        self.new_product(name="潮汐基石")
-        conversation = self.new_ai_conversation()
-        arguments = json.dumps({"query": "潮汐", "limit": 3})
-
-        turns = [
-            _tool_turn("search_products", arguments, "找找看", pieces=4),
-            _text_turn("找到了潮汐基石。", "回答"),
+        script = [
+            call("get_summary", reasoning="先看看汇总"),
+            say("站内一共三类内容。", reasoning="再作答"),
         ]
-        with self.fake_ai(turns) as fake:
-            events, _ = self.ask(conversation["id"], "有没有潮汐这个产品?")
-
-        self.assertIn("done", _types(events))
-        assistant = next(m for m in fake.messages_of(1) if m["role"] == "assistant")
-        sent = json.loads(assistant["tool_calls"][0]["function"]["arguments"])
-        self.assertEqual(sent, {"query": "潮汐", "limit": 3})
-
-        # 工具结果确实作为 role:"tool" 回灌了,而且两头的 id 对得上
-        tool_msg = next(m for m in fake.messages_of(1) if m["role"] == "tool")
-        self.assertEqual(tool_msg["tool_call_id"], assistant["tool_calls"][0]["id"])
-        self.assertIn("潮汐基石", tool_msg["content"])
-        self.assertIn("<tool_result", tool_msg["content"], "工具结果要包在数据分隔符里")
-
-    def test_reasoning_is_accumulated_across_chunks_and_stored(self):
-        conversation = self.new_ai_conversation()
-        with self.fake_ai([_text_turn("回答。", "一二三四五")]):
-            self.ask(conversation["id"], "问题")
+        with self.fake_ai(script):
+            self.ask(conversation["id"], "站内有什么?")
 
         answer = self.answers(conversation["id"])[0]
-        self.assertEqual(answer.reasoning_content, "一二三四五", "跨 chunk 要累积完整")
-        self.assertEqual(answer.content, "回答。")
+        self.assertEqual(answer.reasoning_content, "先看看汇总再作答")
+        self.assertEqual(answer.content, "站内一共三类内容。")
         self.assertEqual(answer.status, "done")
         self.assertEqual((answer.prompt_tokens, answer.completion_tokens), (10, 5))
 
+    def test_absent_reasoning_stays_null(self):
+        """内核压根没给 reasoning 时存 NULL —— 不是空串。
+
+        界面靠这个区分「没有思考过程可显示」和「有思考过程但是空的」。
+        """
+        conversation = self.new_ai_conversation()
+        with self.fake_ai([say("回答。")]):
+            self.ask(conversation["id"], "问题")
+        self.assertIsNone(self.answers(conversation["id"])[0].reasoning_content)
+
+    def test_preamble_before_a_tool_call_is_kept(self):
+        """「我来查一下」也是回答的一部分,不能只留最后那条。
+
+        v6 里这是「累积 vs final_response」的差别;v7 一样(见 `ai_harness` 的
+        worker)—— 前端显示了什么,库里就该存什么。
+        """
+        conversation = self.new_ai_conversation()
+        script = [
+            say("我来查一下。"),
+            call("get_summary"),
+            say("查到了。"),
+        ]
+        with self.fake_ai(script):
+            events, _ = self.ask(conversation["id"], "站内有什么?")
+
+        self.assertEqual(_content(events), "我来查一下。查到了。")
+        self.assertEqual(self.answers(conversation["id"])[0].content, "我来查一下。查到了。")
+
     def test_tool_failure_does_not_break_the_answer(self):
-        """工具炸了要变成 role:"tool" 的错误载荷,不是让整轮 500。"""
+        """工具炸了要变成给模型看的错误信封,不是让整轮 500。"""
         conversation = self.new_ai_conversation()
         boom = dataclasses.replace(
             ai_tools.BY_NAME["search_posts"],
             run=lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")),
         )
-        turns = [
-            _tool_turn("search_posts", json.dumps({"query": "x"})),
-            _text_turn("查询出错了,我换个方式说。"),
+        script = [
+            call("search_posts", {"query": "x"}),
+            say("查询出错了,我换个方式说。"),
         ]
         with mock.patch.dict(ai_tools.BY_NAME, {"search_posts": boom}):
-            with self.fake_ai(turns) as fake:
+            with self.fake_ai(script) as fake:
                 events, response = self.ask(conversation["id"], "搜一下")
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("done", _types(events))
-        tool_msg = next(m for m in fake.messages_of(1) if m["role"] == "tool")
-        self.assertIn("error", tool_msg["content"])
+        self.assertIn("error", fake.runs[0]["tool_outputs"][0])
+        # 轨迹上也要如实标成失败 —— 前端靠这个把那一行标红
+        result = next(e for e in events if e["type"] == "tool_result")
+        self.assertFalse(result["ok"])
 
-    def test_last_round_gets_no_tools_so_it_must_answer(self):
-        """轮数用尽时**不提供工具**,模型只能就手里的东西作答 ——
-        这比「轮数用尽就停下」好:用户至少得到一句话,而不是半截。"""
-        self.new_product(name="甲产品")
-        conversation = self.new_ai_conversation()
-        call = _tool_turn("search_products", json.dumps({"query": "甲"}))
-        turns = [call] * (ai_agent.MAX_ROUNDS - 1) + [_text_turn("根据已有信息,是甲产品。")]
+    def test_kernel_failure_ends_with_an_error_event(self):
+        """内核失败要发一条 error 事件并把状态记成 failed,而不是把流掐断。
 
-        with self.fake_ai(turns) as fake:
-            events, _ = self.ask(conversation["id"], "有甲吗?")
-
-        self.assertEqual(len(fake.requests), ai_agent.MAX_ROUNDS)
-        self.assertIn("tools", fake.requests[0])
-        self.assertNotIn("tools", fake.requests[-1], "最后一轮不该再给工具")
-        self.assertIn("根据已有信息", _content(events))
-
-    def test_wall_clock_deadline_cuts_the_stream_midway(self):
-        """墙钟超时要真的切断,而且要**明说**回答不完整。
-
-        构造:第一片立刻到,第二片之前睡 1 秒 —— 而预算只有 0.3 秒。这同时钉住两件事:
-        ① deadline 是在 **chunk 循环里**检查的(只在轮次开头检查的话,整段都会被读完);
-        ② 已经收到的内容不丢,而是补一句「可能不完整」。
+        ⚠️ **与 v6 的差别**:v6 会把上游自己的话(`Insufficient Balance`)透给
+        浏览器;v7 只回一句通用的,真话进日志和 `ai_messages.error`。
+        对终端用户少了一次信息泄漏,对管理员没损失(他能看到那一列)。
+        这是刻意的,所以这里两头都断言。
         """
         conversation = self.new_ai_conversation()
-        slow = _text_turn("前面的内容", delay_after=1, delay=1.0)
-        with self.fake_ai([slow], env={"AI_WALL_CLOCK_BUDGET": "0.3"}):
+        with self.fake_ai([explode("AiCallError: Insufficient Balance")]):
+            events, response = self.ask(conversation["id"], "问")
+
+        self.assertEqual(response.status_code, 200, "流已经开了,错误只能在流里报")
+        self.assertIn("error", _types(events))
+        detail = next(e["detail"] for e in events if e["type"] == "error")
+        self.assertNotIn("Insufficient Balance", detail, "上游原话不该出现在浏览器里")
+
+        answer = self.answers(conversation["id"])[0]
+        self.assertEqual(answer.status, "failed")
+        self.assertEqual(answer.content, ai_agent._FAILED_NOTE)
+        self.assertIn("Insufficient Balance", answer.error, "但管理员要查得到真原因")
+
+    def test_truncated_run_is_marked_in_events_and_in_the_db(self):
+        """墙钟到点时,已经拿到的内容要留着,并且**明说**它可能不完整。
+
+        「标注必须一起落库」:一条被砍断的回答如果只是流里标了,重开页面就看不出来
+        它没写完。
+        """
+        conversation = self.new_ai_conversation()
+        with self.fake_ai([say("前面的内容")], truncated=True):
             events, _ = self.ask(conversation["id"], "问")
 
         self.assertEqual(_types(events)[0], "start")
@@ -526,25 +594,72 @@ class AiAskTests(AiTestBase):
         self.assertIn("前面的内容", answer.content)
         self.assertIn(ai_agent._TRUNCATED_NOTE, answer.content, "标注必须一起落库")
 
-    def test_exhausted_budget_stops_before_calling_upstream(self):
-        """预算已经耗尽时连上游都不该调用 —— 不然「超时」还在花钱。"""
-        conversation = self.new_ai_conversation()
-        with self.fake_ai([], env={"AI_WALL_CLOCK_BUDGET": "0"}) as fake:
-            events, _ = self.ask(conversation["id"], "问")
+    def test_max_tokens_setting_reaches_the_kernel(self):
+        """管理员那个「单次回答 token 上限」必须真的到内核里去。
 
-        self.assertEqual(fake.requests, [], "预算已经没了还去调上游")
-        self.assertIn(ai_agent._TRUNCATED_NOTE, _content(events))
+        第六版这条叫 `test_max_tokens_setting_reaches_the_request`,断言的是 HTTP
+        请求体里的 `max_tokens`。换了内核之后**没有请求体可断**了 —— 但它没有
+        变成「做不到」:dsh 的 maxTokens 是 `AgentOptions` 的字段,由
+        `DeepSeekHarness(max_tokens=…)` 给,所以到达的位置从「每个请求」变成
+        「每个实例」。这条性质本身(管理员设的值真的会生效)一点没变。
+
+        真正接在哪儿(是不是真给了 SDK、传的是不是 int)由
+        `tests/test_ai_kernel.py::MaxTokensTests` 钉住 —— 这里只钉到这一层,
+        两处合起来才是从头到尾。
+        """
+        conversation = self.new_ai_conversation()
+        with self.fake_ai([say("答。")]) as fake:
+            self.ask(conversation["id"], "问")
+        self.assertEqual(fake.runs[0]["max_tokens"], 4096, "默认值来自 ai_settings")
+
+    def test_changing_max_tokens_changes_what_the_kernel_gets(self):
+        """改设置 → 下一次提问带的就不是旧值。
+
+        这条挡的是「值在某一层被缓存住了」:dsh 的 maxTokens 只在建实例时生效,
+        很容易顺手把它塞进实例池的缓存键之外(那样改了设置要等最多 10 分钟才生效,
+        而界面上看不出任何异常)。`ai_harness._viewer_key` 把 max_tokens 也当成了
+        键的一部分,所以新值会立刻起新实例。
+        """
+        conversation = self.new_ai_conversation()
+        with self.fake_ai([say("一。")]) as first:
+            self.ask(conversation["id"], "问")
+        self.admin_patch_ai_settings(1234)
+        with self.fake_ai([say("二。")]) as second:
+            self.ask(conversation["id"], "再问")
+        self.assertEqual(first.runs[0]["max_tokens"], 4096)
+        self.assertEqual(second.runs[0]["max_tokens"], 1234)
+
+    def test_wall_clock_budget_is_passed_to_the_kernel(self):
+        """预算得真的交给内核 —— 这是 v7 剩下的**唯一**一道上界。
+
+        v6 是「轮数 + 墙钟」两道,换内核后轮数那道没了(见 `ai_agent` 模块头)。
+        所以这一个数的传递必须钉住:断了就一点上界都没有了。
+        """
+        conversation = self.new_ai_conversation()
+        with self.fake_ai([say("答。")], env={"AI_WALL_CLOCK_BUDGET": "37"}) as fake:
+            self.ask(conversation["id"], "问")
+        self.assertEqual(fake.runs[0]["budget_seconds"], 37.0)
+
+    def test_every_question_uses_a_fresh_session_id(self):
+        """**每次提问必须是全新的 session_id** —— dsh 拒绝复用。
+
+        dsh 把会话持久化在 `$DSH_HOME/sessions` 下的 JSONL 里,撞上已存在的 id 会
+        报 `session "…" already exists`。同一个会话里问两次是最容易被忽略的撞法
+        (第一次的 id 已经被写进磁盘了),所以这里问两次。
+        """
+        conversation = self.new_ai_conversation()
+        with self.fake_ai([say("一。")]) as first:
+            self.ask(conversation["id"], "第一个问题")
+        with self.fake_ai([say("二。")]) as second:
+            self.ask(conversation["id"], "第二个问题")
+
+        self.assertNotEqual(first.session_ids[0], second.session_ids[0])
 
     def test_client_disconnect_still_records_what_was_generated(self):
         """关标签页不能白花钱 —— 已经生成的内容与状态必须落库。
 
         直接驱动生成器(而不是走 HTTP):TestClient 会把响应体读完,
         模拟不出「客户端中途跑了」。
-
-        ⚠️ **token 用量在断连时是拿不到的**,这里如实断言 None 而不是编一个数:
-        DeepSeek 只在最后一块 chunk 里带 usage(`stream_options.include_usage`),
-        中途跑掉就是没收到。这是已知且接受的损失(同 ai_agent.sweep_stale_runs),
-        不是这里的 bug —— 所以它被写进测试,而不是被一句「已处理」盖过去。
         """
         user = self.admin_user()
         with SessionLocal() as db:
@@ -556,12 +671,13 @@ class AiAskTests(AiTestBase):
             )
             db.add(answer)
             db.commit()
-            conversation_id, answer_id, viewer = conversation.id, answer.id, ai_tools.Viewer.of(user)
+            conversation_id, answer_id = conversation.id, answer.id
+            viewer = ai_tools.Viewer.of(user)
 
         stream = ai_agent.stream_answer(
             conversation_id=conversation_id, assistant_message_id=answer_id, viewer=viewer
         )
-        with self.fake_ai([_text_turn("生成到一半就没人听了")]):
+        with self.fake_ai([say("生成到一半就没人听了")]):
             self.assertEqual(next(stream)["type"], "start")
             self.assertEqual(next(stream)["type"], "content_delta")
             stream.close()  # ← 客户端跑了
@@ -571,17 +687,21 @@ class AiAskTests(AiTestBase):
             self.assertEqual(stored.status, "interrupted")
             self.assertEqual(stored.error, "客户端断开连接")
             self.assertEqual(stored.content, "生成到一半就没人听了")
+            # ⚠️ **token 用量在断连时是拿不到的**,这里如实断言 None 而不是编一个数:
+            # dsh 的 usage 随整条 `assistant/message` 到达,中途跑掉就是没收到。
+            # 这是已知且接受的损失(同 `sweep_stale_runs`),不是这里的 bug ——
+            # 所以它被写进测试,而不是被一句「已处理」盖过去。
             self.assertIsNone(stored.prompt_tokens, "断连时 usage 还没到,不该编一个")
 
     def test_overlong_reasoning_and_trace_are_truncated(self):
         """reasoning 与 tool_trace 是 ai_messages 最容易长胖的两列,都要有上限。"""
         self.new_product(name="长产品", problem="很长" * 20000)
         conversation = self.new_ai_conversation()
-        turns = [
-            _tool_turn("search_products", json.dumps({"query": "长产品"})),
-            _text_turn("答。", "思考" * 20000),
+        script = [
+            call("search_products", {"query": "长产品"}),
+            say("答。", reasoning="思考" * 20000),
         ]
-        with self.fake_ai(turns):
+        with self.fake_ai(script):
             self.ask(conversation["id"], "长产品是什么?")
 
         answer = self.answers(conversation["id"])[0]
@@ -590,35 +710,8 @@ class AiAskTests(AiTestBase):
 
         trace = json.loads(answer.tool_trace)
         self.assertEqual(trace[0]["calls"][0]["name"], "search_products")
-        self.assertLess(len(trace[0]["calls"][0]["preview"]), ai_agent._TRACE_PREVIEW_CHARS + 60)
-
-    def test_upstream_failure_ends_with_an_error_event(self):
-        """上游挂了要发一条 error 事件并把状态记成 failed,而不是断掉连接。"""
-        conversation = self.new_ai_conversation()
-
-        def exploding_urlopen(req, timeout=None):
-            raise ai_client.urllib.error.HTTPError(
-                "u",
-                402,
-                "Payment Required",
-                {},
-                io.BytesIO(b'{"error":{"message":"Insufficient Balance"}}'),
-            )
-
-        with (
-            mock.patch.object(ai_client.urllib.request, "urlopen", exploding_urlopen),
-            mock.patch.dict(os.environ, _AI_ENV, clear=False),
-        ):
-            events, response = self.ask(conversation["id"], "问")
-
-        self.assertEqual(response.status_code, 200, "流已经开了,错误只能在流里报")
-        self.assertIn("error", _types(events))
-        detail = next(e["detail"] for e in events if e["type"] == "error")
-        self.assertIn("Insufficient Balance", detail, "上游自己的话要透出来")
-
-        answer = self.answers(conversation["id"])[0]
-        self.assertEqual(answer.status, "failed")
-        self.assertEqual(answer.content, ai_agent._FAILED_NOTE)
+        self.assertLess(len(trace[0]["calls"][0]["preview"]),
+                        ai_harness._TRACE_PREVIEW_CHARS + 60)
 
 
 # ================================================================ 配置 / 配额 / 权限
@@ -648,7 +741,7 @@ class AiGateTests(AiTestBase):
     def test_model_name_comes_from_env(self):
         """模型 ID 绝不硬编码 —— DeepSeek 已经改过一轮命名了。"""
         with mock.patch.dict(os.environ, {"AI_MODEL": "deepseek-v4-pro"}, clear=False):
-            self.assertEqual(ai_client.model_name(), "deepseek-v4-pro")
+            self.assertEqual(ai_harness.model_name(), "deepseek-v4-pro")
             self.assertEqual(self.client.get("/api/ai/status").json()["model"], "deepseek-v4-pro")
 
     def test_daily_quota_blocks_before_the_stream_starts(self):
@@ -658,7 +751,7 @@ class AiGateTests(AiTestBase):
             db.commit()
 
         conversation = self.new_ai_conversation()
-        with self.fake_ai([_text_turn("第一次回答。")]):
+        with self.fake_ai([say("第一次回答。")]):
             events, _ = self.ask(conversation["id"], "第一问")
         self.assertIn("done", _types(events))
 
@@ -764,22 +857,6 @@ class AiGateTests(AiTestBase):
                 r = self.client.put("/api/ai/settings", json={**base, field: bad})
                 self.assertEqual(r.status_code, 422)
 
-    def test_max_tokens_setting_reaches_the_request(self):
-        """管理员设的 max_tokens_per_call 必须真的进请求体,否则那是个摆设。"""
-        self.client.put(
-            "/api/ai/settings",
-            json={
-                "enabled": True,
-                "monthly_token_budget": None,
-                "daily_questions_per_user": 20,
-                "max_tokens_per_call": 1234,
-            },
-        )
-        conversation = self.new_ai_conversation()
-        with self.fake_ai([_text_turn("好。")]) as fake:
-            self.ask(conversation["id"], "问")
-        self.assertEqual(fake.requests[0]["max_tokens"], 1234)
-
     def test_non_admin_cannot_touch_settings_or_usage(self):
         employee = self.user_client("e@test.local")
         self.assertEqual(employee.get("/api/ai/settings").status_code, 403)
@@ -789,7 +866,7 @@ class AiGateTests(AiTestBase):
     def test_usage_reports_numbers_without_content(self):
         """管理员看得到「谁在烧钱」,看不到「他问了什么」—— 这条界线要钉住。"""
         conversation = self.new_ai_conversation()
-        with self.fake_ai([_text_turn("秘密的回答内容。")]):
+        with self.fake_ai([say("秘密的回答内容。")]):
             self.ask(conversation["id"], "秘密的问题内容")
 
         usage = self.client.get("/api/ai/usage").json()
@@ -819,7 +896,7 @@ class AiConversationTests(AiTestBase):
     def test_list_is_ordered_by_recent_activity(self):
         first = self.new_ai_conversation()
         self.new_ai_conversation()
-        with self.fake_ai([_text_turn("答。")]):
+        with self.fake_ai([say("答。")]):
             self.ask(first["id"], "让第一个变成最近的")
 
         listed = self.client.get("/api/ai/conversations").json()
@@ -831,12 +908,12 @@ class AiConversationTests(AiTestBase):
         self.assertEqual(conversation["title"], "新会话")
         question = "帮我查一下潮汐基石这个产品的定价策略"
 
-        with self.fake_ai([_text_turn("答。")]) as fake:
+        with self.fake_ai([say("答。")]) as fake:
             events, _ = self.ask(conversation["id"], question)
 
         self.assertEqual(next(e for e in events if e["type"] == "start")["title"], question)
-        # 首问原样进请求(没有被标题那套截断逻辑碰到)
-        self.assertEqual(fake.messages_of(0)[1]["content"], question)
+        # 首问原样进提示词(没有被标题那套截断逻辑碰到)
+        self.assertIn(question, fake.prompts[0])
 
         detail = self.client.get(f"/api/ai/conversations/{conversation['id']}").json()
         self.assertEqual(detail["title"], question)
@@ -844,18 +921,18 @@ class AiConversationTests(AiTestBase):
 
     def test_title_is_not_replaced_by_later_questions(self):
         conversation = self.new_ai_conversation()
-        with self.fake_ai([_text_turn("一。")]):
+        with self.fake_ai([say("一。")]):
             self.ask(conversation["id"], "第一个问题")
-        with self.fake_ai([_text_turn("二。")]) as fake:
+        with self.fake_ai([say("二。")]) as fake:
             events, _ = self.ask(conversation["id"], "第二个完全不同的问题")
 
         self.assertIsNone(next(e for e in events if e["type"] == "start")["title"])
-        self.assertEqual(fake.messages_of(0)[-1]["content"], "第二个完全不同的问题")
+        self.assertIn("第二个完全不同的问题", fake.prompts[0])
 
     def test_long_first_question_is_flattened_into_the_title(self):
         """标题在侧栏只有一行:换行要压成空格,超长要截断。"""
         conversation = self.new_ai_conversation()
-        with self.fake_ai([_text_turn("答。")]):
+        with self.fake_ai([say("答。")]):
             self.ask(conversation["id"], "第一行\n第二行" + "很长" * 100)
 
         title = self.client.get(f"/api/ai/conversations/{conversation['id']}").json()["title"]
@@ -865,11 +942,11 @@ class AiConversationTests(AiTestBase):
     def test_detail_returns_parsed_tool_trace(self):
         self.new_product(name="甲产品")
         conversation = self.new_ai_conversation()
-        turns = [
-            _tool_turn("search_products", json.dumps({"query": "甲"}), "找找"),
-            _text_turn("找到了。", "作答"),
+        script = [
+            call("search_products", {"query": "甲"}, reasoning="找找"),
+            say("找到了。", reasoning="作答"),
         ]
-        with self.fake_ai(turns):
+        with self.fake_ai(script):
             self.ask(conversation["id"], "有甲吗")
 
         detail = self.client.get(f"/api/ai/conversations/{conversation['id']}").json()
@@ -882,9 +959,26 @@ class AiConversationTests(AiTestBase):
         # 工具的**预览**给前端就够了:完整结果是模型上下文,不是界面内容
         self.assertIn("甲产品", answer["tool_trace"][0]["calls"][0]["preview"])
 
+    def test_tool_trace_shape_is_what_the_frontend_renders(self):
+        """轨迹的形状是**前端的契约**,换内核不该动它。
+
+        v6 的分组依据是我们自己的轮次,v7 是 dsh 的 step —— 换的是分组依据,
+        形状(`round` / `reasoning` / `calls[].{name,args,ok,preview}`)保持不变,
+        所以前端一行都没改。这条钉住它。
+        """
+        self.new_product(name="甲产品")
+        conversation = self.new_ai_conversation()
+        with self.fake_ai([call("search_products", {"query": "甲"}), say("找到了。")]):
+            self.ask(conversation["id"], "有甲吗")
+
+        trace = json.loads(self.answers(conversation["id"])[0].tool_trace)
+        self.assertEqual(set(trace[0]), {"round", "reasoning", "calls"})
+        self.assertEqual(set(trace[0]["calls"][0]), {"name", "args", "ok", "preview"})
+        self.assertEqual(trace[0]["calls"][0]["args"], {"query": "甲"})
+
     def test_delete_conversation_removes_messages(self):
         conversation = self.new_ai_conversation()
-        with self.fake_ai([_text_turn("答。")]):
+        with self.fake_ai([say("答。")]):
             self.ask(conversation["id"], "问")
 
         r = self.client.delete(f"/api/ai/conversations/{conversation['id']}")
@@ -918,157 +1012,45 @@ class AiConversationTests(AiTestBase):
         self.assertEqual(anon.post("/api/ai/conversations", json={}).status_code, 401)
 
 
-# ================================================================ 传输层细节
+# ================================================================ 配置查询
 
-class AiClientTests(AiTestBase):
-    """ai_client 本身:SSE 解析、错误体、重试策略。"""
+class AiConfigQueryTests(AiTestBase):
+    """`ai_harness` 里的「配没配好 / 模型叫什么」两个查询。
 
-    @staticmethod
-    def _http_error(status: int, body: bytes):
-        return ai_client.urllib.error.HTTPError(
-            "https://api.deepseek.test", status, "err", {}, io.BytesIO(body)
-        )
+    它们原来住在 `ai_client`(第六版的手写 HTTP 层)。第七版把那个模块**整个删了**
+    ——它的传输层(SSE 解析、错误体、重试、分片拼参数)在换内核之后没有任何调用方,
+    上游请求由 dsh 自己发。留着一份没人用的 HTTP 客户端,只会让下一个读代码的人
+    以为它还在链路上。
 
-    def test_http_error_body_is_surfaced(self):
-        """「DeepSeek 说余额为零」和「上游返回 402」是五分钟与两小时的差别。"""
-        def fake_urlopen(req, timeout=None):
-            raise self._http_error(402, b'{"error": {"message": "Insufficient Balance"}}')
+    这两个查询留下了,因为**门禁和 /status 仍然需要它们**,而且它们与传输无关:
+    只是读环境变量。
+    """
 
-        with (
-            mock.patch.object(ai_client.urllib.request, "urlopen", fake_urlopen),
-            mock.patch.dict(os.environ, _AI_ENV, clear=False),
-            self.assertRaises(ai_client.AiCallError) as ctx,
-        ):
-            list(ai_client.stream([{"role": "user", "content": "x"}], None))
+    def test_unconfigured_without_a_key(self):
+        with mock.patch.dict(os.environ, {"DEEPSEEK_API_KEY": ""}, clear=False):
+            self.assertFalse(ai_harness.is_ai_configured())
 
-        self.assertEqual(ctx.exception.status, 402)
-        self.assertIn("Insufficient Balance", ctx.exception.detail)
+    def test_configured_with_a_key(self):
+        with mock.patch.dict(os.environ, _AI_ENV, clear=False):
+            self.assertTrue(ai_harness.is_ai_configured())
 
-    def test_html_error_body_is_retried_and_keeps_the_text(self):
-        """前置代理返回一页 HTML 时不能因为 json.loads 失败而丢掉原始信息。"""
-        calls = {"n": 0}
+    def test_the_reported_model_is_the_one_we_launch(self):
+        """`/status` 报给管理员的名字必须**就是**启动时用的那个。
 
-        def fake_urlopen(req, timeout=None):
-            calls["n"] += 1
-            raise self._http_error(502, b"<html>Bad Gateway</html>")
+        这里钉的是一条真出现过的 bug:`ai_client.model_name()` 的默认值是
+        `deepseek-flash`,而 `ai_harness._start` 里写的是 `deepseek-v4-flash`
+        —— 没设 `AI_MODEL` 时,设置页会显示一个内核根本没用到的模型名。
+        两处各留一份默认值就会这样,所以现在只有 `model_name()` 一个出处。
+        """
+        with mock.patch.dict(os.environ, {"AI_MODEL": ""}, clear=False):
+            # 空串会让 getenv 返回 ""(不是 None),所以这里显式删掉再读
+            env = dict(os.environ)
+            env.pop("AI_MODEL", None)
+            with mock.patch.dict(os.environ, env, clear=True):
+                self.assertEqual(ai_harness.model_name(), "deepseek-flash")
 
-        with (
-            mock.patch.object(ai_client.urllib.request, "urlopen", fake_urlopen),
-            mock.patch.object(ai_client.time, "sleep", lambda *_: None),
-            mock.patch.dict(os.environ, _AI_ENV, clear=False),
-            self.assertRaises(ai_client.AiCallError) as ctx,
-        ):
-            list(ai_client.stream([{"role": "user", "content": "x"}], None))
 
-        self.assertIn("Bad Gateway", ctx.exception.detail)
-        self.assertEqual(calls["n"], ai_client._MAX_ATTEMPTS, "5xx 是可重试的")
-
-    def test_deterministic_errors_are_not_retried(self):
-        """401/402/400 重试只会烧钱并拖长响应。"""
-        calls = {"n": 0}
-
-        def fake_urlopen(req, timeout=None):
-            calls["n"] += 1
-            raise self._http_error(401, b'{"error":{"message":"bad key"}}')
-
-        with (
-            mock.patch.object(ai_client.urllib.request, "urlopen", fake_urlopen),
-            mock.patch.dict(os.environ, _AI_ENV, clear=False),
-            self.assertRaises(ai_client.AiCallError),
-        ):
-            list(ai_client.stream([{"role": "user", "content": "x"}], None))
-
-        self.assertEqual(calls["n"], 1, "401 不该重试")
-
-    def test_rate_limit_is_retried_then_succeeds(self):
-        calls = {"n": 0}
-
-        def fake_urlopen(req, timeout=None):
-            calls["n"] += 1
-            if calls["n"] == 1:
-                raise self._http_error(429, b'{"error":{"message":"slow down"}}')
-            return _sse([_delta(content="第二次成功了")])
-
-        with (
-            mock.patch.object(ai_client.urllib.request, "urlopen", fake_urlopen),
-            mock.patch.object(ai_client.time, "sleep", lambda *_: None),
-            mock.patch.dict(os.environ, _AI_ENV, clear=False),
-        ):
-            chunks = list(ai_client.stream([{"role": "user", "content": "x"}], None))
-
-        self.assertEqual(calls["n"], 2, "429 应该重试一次")
-        self.assertEqual(chunks[0]["choices"][0]["delta"]["content"], "第二次成功了")
-
-    def test_non_sse_body_yields_nothing(self):
-        """上游回了 200 但不是 SSE(比如一页 HTML)—— 跳过,不抛异常。"""
-        def fake_urlopen(req, timeout=None):
-            return _FakeResponse([b"<html>not json</html>\n"])
-
-        with (
-            mock.patch.object(ai_client.urllib.request, "urlopen", fake_urlopen),
-            mock.patch.dict(os.environ, _AI_ENV, clear=False),
-        ):
-            chunks = list(ai_client.stream([{"role": "user", "content": "x"}], None))
-
-        self.assertEqual(chunks, [])
-
-    def test_malformed_sse_line_is_skipped_but_the_rest_survives(self):
-        """一行坏数据(空行 / 注释 / 半截 JSON)不该让整段流断掉。"""
-        def fake_urlopen(req, timeout=None):
-            return _FakeResponse(
-                [
-                    b"data: {not json\n",
-                    b"\n",
-                    b": keep-alive comment\n",
-                    'data: {"choices":[{"delta":{"content":"好"}}]}\n'.encode("utf-8"),
-                    b"data: [DONE]\n",
-                    'data: {"choices":[{"delta":{"content":"不该出现"}}]}\n'.encode("utf-8"),
-                ]
-            )
-
-        with (
-            mock.patch.object(ai_client.urllib.request, "urlopen", fake_urlopen),
-            mock.patch.dict(os.environ, _AI_ENV, clear=False),
-        ):
-            chunks = list(ai_client.stream([{"role": "user", "content": "x"}], None))
-
-        self.assertEqual(len(chunks), 1, "[DONE] 之后的内容不该再被读到")
-        self.assertEqual(chunks[0]["choices"][0]["delta"]["content"], "好")
-
-    def test_no_sampling_params_are_sent(self):
-        """思考模式下 temperature 之类「设了不报错但完全无效」,别写进去假装有用。"""
-        conversation = self.new_ai_conversation()
-        with self.fake_ai([_text_turn("好。")]) as fake:
-            self.ask(conversation["id"], "问")
-
-        payload = fake.requests[0]
-        for key in ("temperature", "presence_penalty", "frequency_penalty", "reasoning_effort"):
-            self.assertNotIn(key, payload, f"{key} 不该出现 —— 默认值就是不发送")
-
-    def test_stream_options_requested_for_usage(self):
-        conversation = self.new_ai_conversation()
-        with self.fake_ai([_text_turn("好。")]) as fake:
-            self.ask(conversation["id"], "问")
-
-        payload = fake.requests[0]
-        self.assertTrue(payload["stream"])
-        self.assertEqual(payload["stream_options"], {"include_usage": True})
-        # max_tokens 每次都带:管理员那个旋钮有默认值(表为空时用 4096),
-        # 所以它**永远**是「管理员设的数」,不存在「没设」这一档。
-        self.assertEqual(payload["max_tokens"], DEFAULT_MAX_TOKENS_PER_CALL)
-
-    def test_unconfigured_call_raises_before_any_network(self):
-        """没 key 时连 urlopen 都不该被调用。"""
-        def explode(req, timeout=None):
-            raise AssertionError("没配 key 还敢发请求")
-
-        with (
-            mock.patch.object(ai_client.urllib.request, "urlopen", explode),
-            mock.patch.dict(os.environ, {"DEEPSEEK_API_KEY": ""}, clear=False),
-            self.assertRaises(ai_client.AiNotConfigured),
-        ):
-            list(ai_client.stream([{"role": "user", "content": "x"}], None))
-
+# ================================================================ 启动清扫
 
 class AiSweepTests(AiTestBase):
     """启动清扫:进程被杀留下的 running 行不能永远转圈。"""
@@ -1099,7 +1081,7 @@ class AiSweepTests(AiTestBase):
 
     def test_sweep_leaves_finished_rows_alone(self):
         conversation = self.new_ai_conversation()
-        with self.fake_ai([_text_turn("答。")]):
+        with self.fake_ai([say("答。")]):
             self.ask(conversation["id"], "问")
 
         self.assertEqual(ai_agent.sweep_stale_runs(), 0)

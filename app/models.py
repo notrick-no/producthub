@@ -504,22 +504,31 @@ class AiConversation(Base):
 class AiMessage(Base):
     """会话里的一条消息(第六版)。
 
-    ## `reasoning_content` 为什么必须存,而且必须能区分 NULL 与 ''
+    ## `reasoning_content` 为什么留着(理由第七版换过一次)
 
-    DeepSeek 在**带 `tools` 时要求把之前所有轮次的 `reasoning_content` 一起回传**,
-    漏了报 400;而且它**看起来像偶发** —— 服务端还热着的时候容忍,冷回放(会话恢复 /
-    上下文压缩 / prompt cache TTL 过期)才硬失败。**多轮问答的第二次提问是一个新的
-    HTTP 请求**,进程内存里什么都没有,所以 reasoning 只能从库里重建。
+    **第六版的理由是协议要求**,现在已作废,但那段历史值得留着以免有人照旧文档
+    改回去:当时我们自己拼 HTTP 请求,而 DeepSeek 在**带 `tools` 时要求把之前所有
+    轮次的 `reasoning_content` 一起回传**,漏了报 400;而且它**看起来像偶发** ——
+    服务端还热着的时候容忍,冷回放(会话恢复 / 上下文压缩 / prompt cache TTL 过期)
+    才硬失败。那时这一列是承重的。
 
-    而「字段不存在」与「存在但是空字符串」在协议上是**两回事**:空串也必须原样回传,
-    不能丢掉这个键。所以用 **nullable Text** 精确对应:NULL = 当时没有这个字段,
-    `''` = 当时是空串。用一个空串去表示「不存在」会让回传时多发一个键,用一个 NULL
-    去表示空串会让协议少一个键 —— 两种都会踩到那个 400。
+    **第七版把内核换成 dsh 之后,上游请求不再由我们发**(见 `ai_harness` 模块头),
+    历史回传是 dsh 自己会话里的事。现在留着这一列只为**展示**:前端 ThoughtChain
+    靠它渲染「模型的思考过程」,排障时也是它最有用的部分。
+    它**不再是承重列** —— 清空它不会让任何请求失败,只会让思考过程消失。
+    (因此 `ai_agent._history()` 也不再还原这个键,那里有详细说明。)
+
+    **NULL 与 `''` 的区分同样作废。** 那时它必须存在:空串也得原样回传,不能丢键,
+    所以用 nullable Text 精确对应「字段不存在」与「存在但为空」。
+    现在没有回传这回事了,而写入路径上 `stream_answer` 把空串统一转成 `None`
+    (`_clip_text(x) if x else None`)—— 所以**这一列只可能是 NULL 或有内容的字符串**,
+    `''` 已经不可能写进来。列保持 nullable 是为了不动历史数据和迁移;
+    `schemas.AiMessageRead` 里「前端把 NULL 和空串都当没有思考过程」的约定仍然有效。
 
     ## 长度
 
     `reasoning_content` 通常**比 content 长得多**,`tool_trace` 是无上界的 JSON。
-    两者都在写入前截断(见 ai/agent.py 的常量),否则它们会长成这张表最胖的两列。
+    两者都在写入前截断(见 ai_agent 的常量),否则它们会长成这张表最胖的两列。
 
     ## tool_trace 用 Text 存 JSON,不用 JSON 列
 
@@ -535,7 +544,7 @@ class AiMessage(Base):
     )
     role: Mapped[str] = mapped_column(String(20))  # user / assistant
     content: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
-    # NULL = 协议里没有这个字段;'' = 有但是空串。回传时必须照原样,见类注释。
+    # NULL = 没有思考过程(第七版起 '' 已不可能写进来,见类注释)。只为展示。
     reasoning_content: Mapped[str | None] = mapped_column(Text)
     tool_trace: Mapped[str | None] = mapped_column(Text)  # JSON 文本,只为展示
     prompt_tokens: Mapped[int | None] = mapped_column(Integer)

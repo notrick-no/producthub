@@ -52,7 +52,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .. import ai_agent, ai_client, permissions
+from .. import ai_agent, ai_harness, permissions
 from ..ai_tools import Viewer
 from ..db import get_db
 from ..deps import get_current_user, require_admin
@@ -217,9 +217,9 @@ def ai_status(
     used = _tokens_since(db, _month_start())
     budget = settings.monthly_token_budget
     return AiStatusRead(
-        configured=ai_client.is_ai_configured(),
+        configured=ai_harness.is_ai_configured(),
         enabled=settings.enabled,
-        model=ai_client.model_name(),
+        model=ai_harness.model_name(),
         daily_questions_per_user=settings.daily_questions_per_user,
         asked_today=asked,
         remaining_today=max(0, settings.daily_questions_per_user - asked),
@@ -336,7 +336,7 @@ def ask(
     # ---- 1) 开流之前把该拒绝的都拒绝掉 ----
     # 这些必须是**普通 JSON 错误**,不能是 SSE:这时候流还没开始,
     # 前端拿到一个 200 的 text/event-stream 再去里面找错误,是自找的麻烦。
-    if not ai_client.is_ai_configured():
+    if not ai_harness.is_ai_configured():
         raise HTTPException(
             status_code=503,
             detail=(

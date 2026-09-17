@@ -6,3 +6,12 @@ python-dotenv>=1.0
 python-multipart>=0.0.9
 alembic>=1.13
 bcrypt>=4.1
+
+# AI 内核(第七版):DeepSeek Harness 的 Python SDK。
+# ⚠️ **这一行会让镜像大约 +280MB** —— SDK 本体几乎为 0,重的是它依赖的
+# `deepseek-harness-runtime-bin`:一个单文件 Node 可执行体(80MB 压缩)。
+# 好处是**目标机器不需要装 Node**。
+# 平台轮子只有 macos / manylinux_2_28(×86_64 / aarch64)/ win,所以基础镜像
+# 必须是 glibc ≥ 2.28 的(debian bookworm = 2.36,够;alpine 不行)。
+# 固定版本而不是 `>=`:dsh 还在 0.1.x rc 阶段,事件形状我们是一条条对着真机抄的。
+deepseek-harness-sdk==0.1.5rc1
