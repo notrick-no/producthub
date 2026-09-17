@@ -1,5 +1,22 @@
 /* 极简全局样式:组件样式交给 Ant Design,这里只处理最外层 */
 
+/* 应用外壳的两个固定尺寸。**这是唯一一处定义**:AppLayout 的顶栏与内容区内边距
+   也读这两个变量(见 components/AppLayout.tsx),而「要撑满一屏」的页面(目前只有
+   AI 对话页,见下 .ai-page)用它们算自己的高度。改数字只改这里。 */
+:root {
+  --app-header-h: 56px;
+  --app-content-pad: 24px;
+}
+
+/* 窄屏:内容区左右内边距收一半 —— 390px 上 24×2 就是 12% 的宽度。
+   只改这一个变量,顶栏和「撑满一屏」的页面(见下 .ai-page)会一起跟着变,
+   不会像写死两处那样悄悄错开。断点与登录页 / AI 对话页同一个。 */
+@media (max-width: 880px) {
+  :root {
+    --app-content-pad: 12px;
+  }
+}
+
 html,
 body,
 #root {
@@ -157,4 +174,333 @@ body {
     flex: 1 1 100%;
     min-width: 0;
   }
+}
+
+/* ----- AI 回答的 Markdown(第六版)----- */
+/*
+ * react-markdown 产出的就是普通标签,但**没有任何样式** —— 不写这一段的话,
+ * 标题和正文一样大、代码块没有背景、列表没有缩进,看起来像坏了。
+ *
+ * 代码高亮的 `.hljs-*` 类是 `rehype-highlight` 加的(见 components/Markdown.tsx),
+ * 它自己不带 CSS。下面是手写的一份**精简主题**,只覆盖常用的那几类记号。
+ * 想换配色就把这一段整体替换成任意一份 highlight.js 主题即可 ——
+ * 没从 node_modules 里 import,是因为 highlight.js 不是我们的直接依赖
+ * (pnpm 的 node_modules 是严格的,引传递依赖的路径会在下次装包时断掉)。
+ */
+.markdown-body {
+  /* 只在这里开,免得影响页面别处 */
+  word-break: break-word;
+}
+.markdown-body > :first-child {
+  margin-top: 0;
+}
+.markdown-body > :last-child {
+  margin-bottom: 0;
+}
+.markdown-body p,
+.markdown-body ul,
+.markdown-body ol,
+.markdown-body blockquote,
+.markdown-body table,
+.markdown-body pre {
+  margin: 0 0 8px;
+}
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4 {
+  margin: 14px 0 8px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+.markdown-body h1 {
+  font-size: 20px;
+}
+.markdown-body h2 {
+  font-size: 17px;
+}
+.markdown-body h3,
+.markdown-body h4 {
+  font-size: 15px;
+}
+.markdown-body ul,
+.markdown-body ol {
+  padding-left: 22px;
+}
+.markdown-body li + li {
+  margin-top: 2px;
+}
+.markdown-body a {
+  color: #2464e4; /* 品牌色(与邀请邮件里的链接同色) */
+}
+.markdown-body blockquote {
+  padding: 2px 12px;
+  border-left: 3px solid #e5e5e5;
+  color: #595959;
+}
+.markdown-body code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: #f2f2f2;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+.markdown-body pre {
+  padding: 12px 14px;
+  border: 1px solid #f0f0f0;
+  border-radius: 8px;
+  background: #fafafa;
+  /* 长行横滚,不撑破气泡 —— 气泡本身不滚动 */
+  overflow-x: auto;
+}
+.markdown-body pre code {
+  padding: 0;
+  background: none;
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+.markdown-body table {
+  border-collapse: collapse;
+  display: block; /* 宽表自己横滚,同 pre */
+  overflow-x: auto;
+}
+.markdown-body th,
+.markdown-body td {
+  padding: 5px 10px;
+  border: 1px solid #f0f0f0;
+}
+.markdown-body th {
+  background: #fafafa;
+  font-weight: 600;
+}
+.markdown-body hr {
+  border: none;
+  border-top: 1px solid #f0f0f0;
+}
+.markdown-body img {
+  max-width: 100%;
+}
+
+/* ---------- 第六版:AI 对话页的滚动与长内容 ----------
+ *
+ * ⚠️ 这一节里有两条规则**打在 @ant-design/x 的内部类名上**
+ * (`.ant-thought-chain-node-box` / `-description`)。这是知情的取舍:那些类的样式是
+ * cssinjs 运行时注进去的,没有公开契约,升小版本可能改名。改名**不会报错**,只会让
+ * 长文本重新顶出容器 —— 所以以后动 `@ant-design/x` 的版本,改完回来看一眼这一节。
+ * (同一个取舍页面里已经有一处:它没有 exports map,我们是从 `es/` 子路径 import 的。)
+ *
+ * 这两条治的是同一类毛病:**flex 子项默认的 min-width:auto = min-content**,
+ * 于是一段不肯折行的长文本会把整行撑宽,一直顶出卡片。光写 word-break 不够,见下。
+ */
+
+/* 「撑满一屏」的页面:高度 = 视口 − 顶栏 − 内容区上下内边距。
+ *
+ * ⚠️ 为什么是 `calc(100dvh - …)` 而不是 `height: 100%` 或者让父级 flex 撑开 ——
+ * 这两种**都试过,都会在真正需要它的时候失效**。原因是同一条:
+ * 内容一旦高过视口,从 body 到内容区整条链上的高度都会退化成「由内容决定」,
+ * 于是百分比拿到的是 auto、flex 拿到的是不确定的主轴尺寸,滚动区就永远不滚,
+ * 内容继续往外长 —— 而那正是要修的那个毛病(实测:20 条消息时根元素长到 1231px,
+ * 视口只有 713px)。用视口单位算出来的高度与内容无关,环就断在这里了。
+ *
+ * min-height 是兜底:窗口特别矮时退回「整页滚」,总好过把面板压成一条缝。
+ * 两行 height 是渐进增强,老浏览器不认 dvh 就用 vh。 */
+.ai-page {
+  height: calc(100vh - var(--app-header-h) - var(--app-content-pad) * 2);
+  height: calc(100dvh - var(--app-header-h) - var(--app-content-pad) * 2);
+  min-height: 480px;
+}
+
+/* 消息区是**唯一**的滚动容器:思考过程与气泡都在它里面,一起滚。
+   overscroll-behavior 防止滚到底之后把整个页面也带着滚(触控板上很容易误触)。 */
+.ai-chat-scroll {
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+}
+
+/* ---------- 窄屏(第七版联调补的)----------
+ *
+ * 原来这两列的布局是**写在 JSX 的 inline style 里**的(宽 240 + borderRight + flex),
+ * 于是没有任何断点能改它。390px 上量出来的结果是:外壳侧栏 220px + 这 240px 一起把
+ * 消息区挤到 **16px** —— 右边那一栏基本看不见了(截图在联调记录里)。
+ *
+ * 所以把布局挪进 CSS(只挪布局,视觉没动),窄屏下改成上下两段:
+ * 会话列表横过来变成顶部一条(限高、自己滚),消息区拿满剩下的高度。
+ * 断点用 **880px,与登录页同一个**(那里也是「窄到一定程度就换构图」)。
+ *
+ * ⚠️ 这两个类**必须是普通 div**,不能是 antd 的 <Flex>:它的方向是 cssinjs 运行时
+ * 注进去的类,和我这条媒体查询同为 0/1/0 的优先级,谁赢取决于样式表插入顺序 ——
+ * 而那正是「读源码推布局」最容易推错的地方(见 index.css 上面那段 ⚠️)。
+ */
+.ai-body {
+  display: flex;
+  align-items: stretch;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* 左列:会话列表。它自己滚 —— 会话攒多了不该把右边的面板一起顶长。 */
+.ai-conv-list {
+  width: 240px;
+  flex: none;
+  padding: 8px;
+  overflow-y: auto;
+  border-right: 1px solid #f0f0f0;
+}
+
+/* 右列:消息流 + 输入框。 */
+.ai-chat-pane {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+@media (max-width: 880px) {
+  .ai-body {
+    flex-direction: column;
+  }
+  .ai-conv-list {
+    width: auto;
+    /* 限高三成:会话列表再长也不许把消息区压没。消息区在下面 flex:1,拿剩下的。 */
+    max-height: 32%;
+    border-right: none;
+    border-bottom: 1px solid #f0f0f0;
+  }
+}
+
+/* ---------- 窄屏:展开的左侧导航改成**浮层** ----------
+ *
+ * antd 的 Sider 收起(<768,它的 md 断点)时会留一个「把手」,点一下又展开 ——
+ * 但它是**参与布局**的:展开就是实打实占 220px。手机上实测,点开导航后内容区
+ * 从 363px 被挤到 **144px**,消息区和输入框跟着变形 —— 等于把刚修好的毛病
+ * 从「AI 页自己的两列」搬到「外壳的导航」上再犯一次。
+ *
+ * 所以窄屏下让它脱离文档流浮在内容上面(手机上的常规做法)。
+ * `:has()` 那行是必须的:antd 的 .ant-layout **没有** position,
+ * 不定个定位祖先的话,absolute 会一路跑到文档上,`top/bottom: 0` 就变成整篇的高度。
+ *
+ * 断点写 767.98 而不是 768:antd 内部判定 md 断点用的就是 767.98,两边对齐,
+ * 免得出现「它认为收起了、我们以为展开了」的一像素缝隙。 */
+@media (max-width: 767.98px) {
+  .ant-layout:has(> .ant-layout-sider) {
+    position: relative;
+  }
+  .ant-layout-sider {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 30;
+    overflow-y: auto;
+  }
+}
+
+/* 思考过程正文 / 工具结果预览(模型写的字,长短完全不可控)。 */
+.ai-thought-text {
+  white-space: pre-wrap;
+  /* 这一行和上面那条 `min-width: 0` 是**一对,缺一不可**(实测过,别删其中一条):
+     · 只有 `min-width: 0`:内容盒不再把整行顶宽,但长串自己不会折行,于是文字从
+       变窄了的盒子里**照样漏出去**(实测盒宽 478px,而文字排布宽度仍是 705px)。
+     · 只有断行规则、没有 `min-width: 0`:盒子被长串顶宽到 705px,整块溢出容器。
+     两个一起才是 478px 整齐折行。
+     中文本身可以在任意字之间断行,所以这个毛病**主要在英文思考 / 长链接 / 长标识符
+     上暴露**,看起来就像「有时候好、有时候溢出」。 */
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #595959;
+}
+
+/* ThoughtChain 的每个节点是「图标 + 内容盒」的 flex 行,而那个内容盒既没有 flex:1
+   也没有 min-width:0 —— flex 子项默认的 min-width:auto 就是 min-content,于是长串
+   把整行顶宽、整块溢出卡片(实测 500px 的容器里内容盒长到 705px)。
+   这两行把它钉回该有的样子:占满剩余宽度,并允许缩到 min-content 以下。
+   配套的断行规则在下面 .ai-thought-text,两个一起才有效。 */
+.ai-thinking .ant-thought-chain-node-box {
+  flex: 1;
+  min-width: 0;
+}
+/* 工具调用的参数描述同样可能很长(argument 里塞了一整段搜索词)。 */
+.ai-thinking .ant-thought-chain-node-description {
+  overflow-wrap: anywhere;
+}
+
+/* 回答顶上那行「时间 / 状态 / 出错说明」。它**不在** .ant-bubble-content 里,拿不到
+   组件自带的 word-break,而里面的出错说明是从上游错误体里挖出来的原文(可能带长 URL)。 */
+.ai-page .ant-bubble-header {
+  overflow-wrap: anywhere;
+}
+
+/* 流式生成中的光标:让「还在写」一眼可见 */
+.markdown-caret {
+  display: inline-block;
+  width: 6px;
+  height: 15px;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  background: #bfbfbf;
+  animation: markdown-blink 1s steps(2, start) infinite;
+}
+@keyframes markdown-blink {
+  to {
+    visibility: hidden;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .markdown-caret {
+    animation: none;
+  }
+}
+
+/* 精简的 highlight.js 主题(浅色) */
+.hljs-comment,
+.hljs-quote {
+  color: #8c8c8c;
+  font-style: italic;
+}
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-type {
+  color: #a626a4;
+}
+.hljs-string,
+.hljs-regexp,
+.hljs-addition,
+.hljs-attribute {
+  color: #50a14f;
+}
+.hljs-number,
+.hljs-variable,
+.hljs-template-variable,
+.hljs-selector-attr,
+.hljs-selector-pseudo {
+  color: #986801;
+}
+.hljs-title,
+.hljs-section,
+.hljs-name,
+.hljs-selector-id,
+.hljs-selector-class {
+  color: #4078f2;
+}
+.hljs-built_in,
+.hljs-builtin-name,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-link {
+  color: #c18401;
+}
+.hljs-meta,
+.hljs-deletion {
+  color: #e45649;
+}
+.hljs-emphasis {
+  font-style: italic;
+}
+.hljs-strong {
+  font-weight: 600;
 }

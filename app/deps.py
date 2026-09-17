@@ -65,7 +65,7 @@ def clear_session_cookie(response: Response) -> None:
 
 
 def delete_user_sessions(db: Session, user_id: int) -> None:
-    """踢掉该用户全部会话(禁用员工 / 重置密码时用)。"""
+    """踢掉该用户全部会话(禁用用户 / 重置密码时用)。"""
     db.execute(delete(AuthSession).where(AuthSession.user_id == user_id))
 
 

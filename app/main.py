@@ -22,8 +22,11 @@ from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 
 from app.bootstrap import ensure_bootstrap_admin
+from app.ai_agent import sweep_stale_runs
+from app import ai_harness
 from app.db import SessionLocal
 from app.routers import (
+    ai,
     auth,
     blog,
     categories,
@@ -42,7 +45,17 @@ async def lifespan(_app: FastAPI):
     # 空库且 env 配了 ADMIN_EMAIL/ADMIN_PASSWORD → 建首个管理员(幂等,见 app/bootstrap.py)
     with SessionLocal() as db:
         ensure_bootstrap_admin(db)
+    # 上一次进程被杀时留在 running 的 AI 回答,在这里收尾(见 app/ai_agent.py)
+    sweep_stale_runs()
     yield
+    # 关掉池子里所有 dsh 实例(每个 = 1 个 node 子进程 + 1 个 MCP 子进程)。
+    # ⚠️ **不关的后果不是"优雅不优雅"**:那些子进程的父进程没了之后会各自被
+    # 重新挂到 init 上继续活着 —— 反复重启/发版之后容器里会攒下一堆孤儿进程,
+    # 每个都还揣着一份 API key 和数据库连接。Railway 每次发版都重启,所以这条
+    # 路径是**常规路径**,不是异常路径。
+    # 放在 yield 之后 = 正常关闭与收到信号时都会走到;它自己吞掉所有异常
+    # (见 ai_harness.shutdown_all),关不掉也不该拦住进程退出。
+    ai_harness.shutdown_all()
 
 
 app = FastAPI(title="producthub API", version="0.1.0", lifespan=lifespan)
@@ -55,6 +68,7 @@ app.include_router(users.router)
 app.include_router(comments.router)  # 评论 / 点赞(第五版)
 app.include_router(blog.router)  # 博客:帖子 / 标签 / 点赞(第五版)
 app.include_router(home.router)  # 首页动态 / 汇总(第四版)
+app.include_router(ai.router)  # AI 问答(第六版)
 
 
 @app.get("/api/health")

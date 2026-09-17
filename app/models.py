@@ -161,9 +161,9 @@ class ProductImage(Base):
 
 
 class User(Base):
-    """组织账号(管理员 / 员工)。
+    """组织账号(管理员 / 用户)。
 
-    登录走邮箱 + 密码;员工账号由管理员创建、收到邀请邮件后自设密码。
+    登录走邮箱 + 密码;用户账号由管理员创建、收到邀请邮件后自设密码。
     `password_hash` 为空 = 尚未设过密码(邀请待完成);
     `must_change_password` = 下次登录必须先改密(重置密码后强制);
     `is_active` False = 离职冻结,登录与既有会话都被拒绝。
@@ -174,7 +174,7 @@ class User(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     email: Mapped[str] = mapped_column(String(255), unique=True)  # 登录邮箱(小写)
-    name: Mapped[str] = mapped_column(String(255))  # 员工姓名
+    name: Mapped[str] = mapped_column(String(255))  # 用户姓名
     department: Mapped[str | None] = mapped_column(String(100))  # 初始部门(可空)
     role: Mapped[str] = mapped_column(
         String(20), server_default=text("'employee'")
@@ -207,7 +207,7 @@ class User(Base):
 class AuthSession(Base):
     """一次登录会话:随机 token 的 sha256 存这里,明文只放 HttpOnly cookie。
 
-    显式记录以便「禁用员工 / 重置密码」时一键踢掉该用户全部会话;
+    显式记录以便「禁用用户 / 重置密码」时一键踢掉该用户全部会话;
     过期或删除后需重新登录。token 本身用 secrets 生成,库里只存哈希。
 
     类名不叫 Session:那个名字被 SQLAlchemy 的会话占着,叫 Session 的话每个
@@ -464,6 +464,156 @@ class Requirement(Base):
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class AiConversation(Base):
+    """一次 AI 问答会话(第六版)。
+
+    **`created_by` 是 NOT NULL + CASCADE,不是 SET NULL** —— 这一点与 blog_posts / comments /
+    activity_events 都相反,是**故意的**。那些是「共享内容」或「审计记录」:作者走了,
+    东西还得留着给人看,所以 SET NULL + author_name 兜底。而会话是**私有的**:
+    只有本人看得见(管理员只看得到汇总用量,看不到内容),所以作者一走,这一行
+    就没有任何人有权限看 —— SET NULL 只会攒下一堆谁也打不开的孤儿行。
+
+    同款先例是 `AuthSession.user_id`(私有 + CASCADE + NOT NULL),照它写。
+
+    代价要认:删账号会一并删掉他的 token 用量历史,于是「本月已用」会往下掉。
+    这是可接受的(没有人会靠删账号来重置预算),不为它单独拆一张用量表。
+
+    不声明与 AiMessage 的 relationship,照 Comment 的先例(见该类的注释):
+    子表外键是 ON DELETE CASCADE,声明了关系反而要操心 passive_deletes,
+    而这一版只需要「按 conversation_id 查消息」,一条 select 就够了。
+    """
+
+    __tablename__ = "ai_conversations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    title: Mapped[str] = mapped_column(String(255))  # 取首问前若干字,见 routers/ai.py
+    created_by: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class AiMessage(Base):
+    """会话里的一条消息(第六版)。
+
+    ## `reasoning_content` 为什么留着(理由第七版换过一次)
+
+    **第六版的理由是协议要求**,现在已作废,但那段历史值得留着以免有人照旧文档
+    改回去:当时我们自己拼 HTTP 请求,而 DeepSeek 在**带 `tools` 时要求把之前所有
+    轮次的 `reasoning_content` 一起回传**,漏了报 400;而且它**看起来像偶发** ——
+    服务端还热着的时候容忍,冷回放(会话恢复 / 上下文压缩 / prompt cache TTL 过期)
+    才硬失败。那时这一列是承重的。
+
+    **第七版把内核换成 dsh 之后,上游请求不再由我们发**(见 `ai_harness` 模块头),
+    历史回传是 dsh 自己会话里的事。它**不再是承重列** —— 清空它不会让任何请求失败。
+    (因此 `ai_agent._history()` 也不再还原这个键,那里有详细说明。)
+
+    ## 它现在到底服务谁(2026-09-17 联调时改正:这里原先写的是「前端 ThoughtChain
+    ## 靠它渲染」,**那句话是错的**)
+
+    写下来是因为它读起来太顺、太像承重的,而顺着它推会推错:
+
+    - **前端渲染思考过程,读的是 SSE 事件**(`reasoning_delta` → 一个局部 state),
+      **不是这一列**。所以生成过程中屏幕上确实有思考链,那是流的功劳。
+    - 一轮结束、库里那份铺回界面之后,**没有任何代码再读这个字段** ——
+      历史消息那条渲染路径只读 `role` / `content` / `status` / `error` / token 两列。
+      真机核对过:库里 695 字的思考过程,界面上一处都不显示(前端 `types.ts` 里
+      虽然有这个字段的声明,但全仓库没有第二个引用)。
+    - 所以它**当前的实际用途是排障**:出问题时翻库里那一轮模型想了什么。
+      它仍然通过 API 发给前端(每次拉会话都带上),那是为「以后要在历史里也画出来」
+      留的口子 —— 那个功能**至今没做**,这里不假装它做了。
+
+    `tool_trace` **是同一个处境**(每回合一条工具轨迹,同样只写不读),
+    两条列一起看:它们都是「数据库里存着、界面不看」的展示备用列。
+    改这一段时请一并核对前端,别再写一句读起来很顺的假话。`doc/架构.md` 同步改过。
+
+    **NULL 与 `''` 的区分同样作废。** 那时它必须存在:空串也得原样回传,不能丢键,
+    所以用 nullable Text 精确对应「字段不存在」与「存在但为空」。
+    现在没有回传这回事了,而写入路径上 `stream_answer` 把空串统一转成 `None`
+    (`_clip_text(x) if x else None`)—— 所以**这一列只可能是 NULL 或有内容的字符串**,
+    `''` 已经不可能写进来。列保持 nullable 是为了不动历史数据和迁移;
+    `schemas.AiMessageRead` 里「前端把 NULL 和空串都当没有思考过程」的约定仍然有效。
+
+    ## 长度
+
+    `reasoning_content` 通常**比 content 长得多**,`tool_trace` 是无上界的 JSON。
+    两者都在写入前截断(见 ai_agent 的常量),否则它们会长成这张表最胖的两列。
+
+    ## tool_trace 用 Text 存 JSON,不用 JSON 列
+
+    我们从不往里查,而且**截断过的 JSON 不是合法 JSON** —— 用 JSON 列会在超长时直接报错。
+    存 Text、写入前把每个 preview 各自截断,则怎么都不会写坏。
+    """
+
+    __tablename__ = "ai_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    conversation_id: Mapped[int] = mapped_column(
+        ForeignKey("ai_conversations.id", ondelete="CASCADE"), index=True
+    )
+    role: Mapped[str] = mapped_column(String(20))  # user / assistant
+    content: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
+    # NULL = 没有思考过程(第七版起 '' 已不可能写进来)。
+    # ⚠️ 当前**没有界面读者**,用途与处境见类注释「它现在到底服务谁」。
+    reasoning_content: Mapped[str | None] = mapped_column(Text)
+    # JSON 文本;**与 reasoning_content 同一个处境**(只写不读,见类注释)。
+    tool_trace: Mapped[str | None] = mapped_column(Text)
+    prompt_tokens: Mapped[int | None] = mapped_column(Integer)
+    completion_tokens: Mapped[int | None] = mapped_column(Integer)
+    # running = 流还在进行(进程被重启会留下这种行,启动时清扫);
+    # done / failed / interrupted(用户中途关掉页面)
+    status: Mapped[str] = mapped_column(String(20), server_default=text("'running'"))
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+
+
+class AiSettings(Base):
+    """AI 的全局设置(第六版):**单行表,id 恒为 1**。
+
+    「限额由管理员设置」要求它能在界面上改,所以不能只是环境变量 ——
+    **管理员不是部署者**,让人为了改一个数字去动 Railway 的环境变量并重启,不叫「可设置」。
+
+    ## 为什么是显式列的单行表,而不是通用的 key-value settings 表
+
+    只有四个旋钮,而且这个代码库的风格是显式列(`doc/架构.md` 的「存事实」)。
+    通用键值表的好处是「加设置不用迁移」,代价是**每个读设置的地方都要处理
+    「这个键不存在」**,并且值的类型变成 Any —— 为一个还没出现的需求先付这笔钱,
+    正是 `doc/架构.md:443-472` 说的「偶尔重复 → 先重复」。**将来第三个功能也要设置时
+    再泛化**,那时改成键值表,调用点一处不用动。
+
+    表里**允许没有行**:读设置的地方用下面的默认值兜底,不让「管理员还没进过这个页面」
+    变成「AI 不能用」。
+    """
+
+    __tablename__ = "ai_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)  # 恒为 1
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("true")
+    )  # 总开关:关掉后提问接口直接拒绝
+    # 本月 prompt+completion 之和的上限;NULL = 不限
+    monthly_token_budget: Mapped[int | None] = mapped_column(Integer)
+    daily_questions_per_user: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("20")
+    )
+    max_tokens_per_call: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("4096")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    updated_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
     )
 
 

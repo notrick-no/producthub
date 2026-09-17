@@ -18,7 +18,8 @@ REST 风格,统一前缀 `/api`,请求/响应均为 JSON,字段 snake_case。字
 | 404 | 资源不存在 |
 | 409 | 唯一约束冲突(分类名 / 产品 url / 邮箱重复) |
 | 422 | 请求体校验失败(Pydantic) |
-| 503 | 邮件(SMTP)未配置或发送失败(建号 / 重置时) |
+| 429 | AI 超出限额(今日次数 / 本月额度) |
+| 503 | 邮件(SMTP)未配置或发送失败(建号 / 重置时);AI 未配置(没设 `DEEPSEEK_API_KEY`) |
 
 **错误体**:非 2xx 一律返回 `{"detail": "<原因>"}`,`detail` 为可直接展示的中文文案。
 
@@ -34,7 +35,7 @@ REST 风格,统一前缀 `/api`,请求/响应均为 JSON,字段 snake_case。字
 - `Auth` 一节内的登录/登出/改密接口,以及 `/api/health`、`/uploads`(产品图片)保持公开。
 - **前端无需手工管理 token**:cookie 由浏览器自动携带,`client.ts` 收到 401 会清登录态并跳登录页。
 - 没有公开注册页。**第一个管理员**由启动引导自动创建(库空 + env `ADMIN_EMAIL/ADMIN_PASSWORD`,
-  见 `doc/部署.md`);后续员工账号由管理员在本界面创建并邮件邀请。
+  见 `doc/部署.md`);后续用户账号由管理员在本界面创建并邮件邀请。
 
 ---
 
@@ -59,7 +60,7 @@ REST 风格,统一前缀 `/api`,请求/响应均为 JSON,字段 snake_case。字
 }
 ```
 
-`role ∈ {admin, employee}`;`password_set` 由后端派生(哈希非空 = 已设过密码);受邀未设密的员工
+`role ∈ {admin, employee}`;`password_set` 由后端派生(哈希非空 = 已设过密码);受邀未设密的用户
 该字段为 `false`。
 
 `last_login_at` / `last_login_ip` = **最后一次成功登录**的时间与来源 IP(第五版审计)。
@@ -92,7 +93,7 @@ REST 风格,统一前缀 `/api`,请求/响应均为 JSON,字段 snake_case。字
 
 ---
 
-## Users 员工账号(仅管理员)
+## Users 用户账号(仅管理员)
 
 **整个 `/api/users` 只允许 `role=admin`**:非管理员 → `403`,未登录 → `401`。
 
@@ -533,6 +534,108 @@ REST 风格,统一前缀 `/api`,请求/响应均为 JSON,字段 snake_case。字
 
 ---
 
+## AI 助手(第六版)
+
+DeepSeek 接入。**会话只本人可见,管理员也不行** —— 看不见时返回 **404** 而不是 403
+(403 等于承认「有这么个会话」,同博客草稿的规矩)。
+
+`GET /api/ai/status` 把**部署状态**(`configured`)与**管理员开关**(`enabled`)分开报:
+两者要提示的话术和该找的人都不一样。未配 key 时提问接口返回 503,站内其它功能不受影响。
+
+### GET /api/ai/status
+
+当前用户此刻能不能问、还能问几问。前端据此把输入框置灰并给出原因。
+
+```json
+{ "configured": true, "enabled": true, "model": "deepseek-flash",
+  "daily_questions_per_user": 20, "asked_today": 3, "remaining_today": 17,
+  "monthly_token_budget": null, "month_tokens_used": 0, "month_budget_exceeded": false }
+```
+
+`monthly_token_budget` 为 `null` = **不限**(是明确的选择,不是「还没设置」)。
+
+### GET /api/ai/conversations
+
+我的会话列表,最近活动的在前。不含消息(详情才拉)。
+
+### POST /api/ai/conversations
+
+新建空会话,返回 201。**标题不在这里定** —— 取首问的前 30 字(见下面的提问端点),
+所以列表不会先闪一个「新会话」再变。
+
+### GET /api/ai/conversations/{id}
+
+会话详情 = 会话本身 + 全部消息(`messages`)。`tool_trace` 在库里是 JSON 文本,
+这里**解析成结构**再返回,前端不该自己 `try/except` 一个 `json.parse`:
+坏 JSON 当作没有,不让一段脏数据把整个会话卡成打不开。
+
+`reasoning_content` 为 `null` = 当时协议里**没有**这个字段,空串 = 有但是空
+(见 `doc/架构.md` 第六版那条:DeepSeek 要求回传,两者在协议上是两种东西)。
+
+### DELETE /api/ai/conversations/{id}
+
+204。**硬删**,消息随外键 CASCADE 一起走 —— 与评论的「墓碑」不同:那是有别人参与的讨论,
+删了会抹掉别人的话;这里是纯私有的一问一答。
+
+### POST /api/ai/conversations/{id}/messages ★ SSE
+
+提问,**流式**。请求体 `{"content": "..."}`(1–4000 字,两端空白会被裁掉)。
+
+⚠️ **这是全站唯一的流式端点**(`text/event-stream`),响应头带
+`Cache-Control: no-cache` 与 `X-Accel-Buffering: no`(防代理缓冲)。
+
+**开流之前**的失败一律是**普通 JSON**,不是 SSE 事件 —— 那时流还没开始,
+让前端拿到一个 200 的 `text/event-stream` 再去里面找错误是自找的麻烦:
+
+| 情况 | 码 | 文案要点 |
+| --- | --- | --- |
+| 没配 `DEEPSEEK_API_KEY` | 503 | 「AI 未配置」 |
+| 管理员关掉了开关 | 403 | 「AI 助手已被管理员关闭」 |
+| 今日次数用完 | 429 | 「今日提问次数已用完(n/N),每天 0 点(北京时间)重置」 |
+| 本月额度用完 | 429 | 「本月 AI 额度已用完(已用 X / 上限 Y tokens)」 |
+
+开流之后,每个事件是一行 `data: {...}`(JSON 里不会有换行,所以不涉及多行 data):
+
+| `type` | 载荷 | 前端去处 |
+| --- | --- | --- |
+| `start` | `message_id`、`title`(首问时非空) | 侧栏标题 |
+| `reasoning_delta` | `text` | 思考过程(跨 chunk 累积) |
+| `content_delta` | `text` | 答案正文(Markdown 渲染) |
+| `tool` | `name`、`args` | 工具轨迹 |
+| `tool_result` | `name`、`ok`、`preview` | 工具轨迹(**只有预览**) |
+| `done` | `message_id`、`usage` | 用量 |
+| `error` | `detail` | 提示 |
+
+**`tool_result` 只发截断过的预览** —— 完整的工具结果是模型上下文,不是界面内容。
+
+**回答先落一条 `running` 的行、结束时改写**:这样流中断(关标签页 / 断网 / 进程重启)
+也留痕,不会静默丢一次提问。客户端断开时已生成的 token 仍然落库
+(钱是用户在出的,那天答了一半也是花了钱的),此时 `prompt_tokens` 会是 `null` ——
+用量只在**最后一块**才到达,断开时它确实还没有,这一条不假装知道。
+
+**权限**:AI 读到的每一行都是**已发布**的(`published_at is not null`),草稿一律当作不存在。
+⚠️ 这不等于「AI 永远不会泄露别人的草稿」—— 管理员本来就在界面上看得到所有人的草稿。
+准确说法是上面那句,它是**比界面更严**的规则,对管理员提问**同样**成立。
+
+### GET / PUT /api/ai/settings(仅管理员)
+
+限额旋钮。`GET` 在表里没行时返回**默认值**(每日 20 问 / 单次 4096 tokens / 月度不限),
+不是 404 —— 前端拿到的永远是一份可以直接渲染的设置。
+
+`PUT` 是**全量提交**(四个旋钮一起写),不是 PATCH:分开改容易改出
+「开关关了但额度还是旧的」这种半截状态。第一次调用时创建那一行。
+
+`monthly_token_budget` 可空(`null` = 不限),`daily_questions_per_user` 1–1000,
+`max_tokens_per_call` 256–32000。
+
+### GET /api/ai/usage(仅管理员)
+
+本月用量 + 今日各人提问数。**只有数字,没有任何提问内容** —— 这是
+`can_manage_ai_settings`(调额度)与 `can_view_ai_conversation`(看会话)的分界线:
+查出「谁在烧钱」和「他到底问了什么」是两件事。
+
+---
+
 ## 前端接口对照
 
 `frontend/src/api/resources.ts` 与上面一一对应,统一走 `client.ts`(自动处理错误与 204)。
@@ -542,3 +645,7 @@ REST 风格,统一前缀 `/api`,请求/响应均为 JSON,字段 snake_case。字
 `crud<T>(basePath)` 工厂生成(第四版收敛,此前有十几份逐字相同的副本)。**端点本身不抽象**:
 产品列表要按 `?category_id=` 过滤、用户 PATCH 的载荷是 `UserPatchPayload`、重置密码要发邮件,
 这些形状不同的照旧各自显式写,不往工厂里加 if。
+
+**AI 那组进不了工厂**,而且比评论 / 博客更彻底:`ask` 根本不是 JSON 响应而是一个**流**
+(`client.ts` 的 `postStream`,手工解析 SSE —— `EventSource` 不支持 POST);
+`/status`、`/settings`、`/usage` 都是**单例**,没有 id 也没有 list。

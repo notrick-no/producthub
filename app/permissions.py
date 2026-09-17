@@ -12,14 +12,14 @@
 谓词只回答「能不能」,不负责报错。调用方照常 raise HTTPException —— 这样同一个谓词
 既能用在「守卫」也能用在「过滤」(比如列表里决定哪些行显示删除按钮)。
 """
-from .models import BlogPost, Comment, User
+from .models import AiConversation, BlogPost, Comment, User
 
 
 def can_delete_comment(user: User, comment: Comment) -> bool:
     """能不能删这条评论:作者本人,或管理员。
 
     `author_id` 可能为空(账号被删,SET NULL)。那种评论**只有管理员**能删 ——
-    没有作者可归属,就不能让任何一个普通员工认领它。
+    没有作者可归属,就不能让任何一个普通用户认领它。
     """
     if user.role == "admin":
         return True
@@ -47,3 +47,27 @@ def can_edit_post(user: User, post: BlogPost) -> bool:
     不是「谁能改」的问题,所以它留在 routers/blog.py。
     """
     return user.role == "admin" or _is_author(user, post)
+
+
+def can_view_ai_conversation(user: User, conversation: AiConversation) -> bool:
+    """能不能看这次 AI 会话:**只有创建者本人,管理员也不行**(第六版)。
+
+    与 `can_view_post` 的规矩**故意相反**:那里管理员看得到所有草稿,这里是私有对话。
+    理由是两者的内容性质不同 —— 博客是**写给全公司看的**,草稿只是还没写完;
+    而 AI 会话里是**一个人问问题的方式**,没有人是"为了给别人看"才去问的。
+    让管理员能翻别人的提问记录,是这一版不该顺手拿到的东西。
+
+    代价要认:管理员**看得到汇总用量**(本月烧了多少 token、每个人今天问了几次),
+    但看不到任何一条提问内容。查出"谁在烧钱"和"他到底问了什么"是两件事,
+    这一版只做前者。
+    """
+    return conversation.created_by == user.id
+
+
+def can_manage_ai_settings(user: User) -> bool:
+    """能不能改 AI 的限额设置:仅管理员(第六版)。
+
+    **与 `can_view_ai_conversation` 不矛盾**:管理员管的是"额度多少"这个旋钮,
+    不是"别人问了什么"。一个数字可以交给管理员,一段私有对话不行。
+    """
+    return user.role == "admin"

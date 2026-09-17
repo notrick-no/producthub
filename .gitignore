@@ -26,3 +26,8 @@ uploads/
 .pytest_cache/
 .coverage
 htmlcov/
+
+# DeepSeek Harness 的工作目录(第七版):内含 node_modules(236 个包)、
+# 按 viewer 生成的 profile patch,以及**会话 JSONL —— 那是完整的对话内容**。
+# 一律不进 git。
+.dsh/

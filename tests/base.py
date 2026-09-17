@@ -235,3 +235,14 @@ class ApiTestCase(unittest.TestCase):
         r = self.client.post("/api/blog/tags", json={"name": name})
         self.assertEqual(r.status_code, 201, r.text)
         return r.json()
+
+    def new_ai_conversation(
+        self, client: TestClient | None = None, **fields
+    ) -> dict:
+        """POST 新建一个 AI 会话,断言 201 后返回响应 JSON。
+
+        client 传另一个已登录客户端 = 以别人的身份建,用于「会话只自己可见」这类用例。
+        """
+        r = (client or self.client).post("/api/ai/conversations", json=fields)
+        self.assertEqual(r.status_code, 201, r.text)
+        return r.json()
