@@ -70,7 +70,7 @@ export default function AccountsPage() {
     try {
       await updateUser(u.id, { is_active: active })
       message.success(
-        active ? `已启用 ${u.name}` : `已停用 ${u.name}(该员工已被登出)`,
+        active ? `已启用 ${u.name}` : `已停用 ${u.name}(该用户已被登出)`,
       )
       await reload()
     } catch (err) {
@@ -111,7 +111,7 @@ export default function AccountsPage() {
       dataIndex: 'role',
       width: 90,
       render: (r: User['role']) =>
-        r === 'admin' ? <Tag color="gold">管理员</Tag> : <Tag>员工</Tag>,
+        r === 'admin' ? <Tag color="gold">管理员</Tag> : <Tag>用户</Tag>,
     },
     {
       title: '状态',
@@ -171,7 +171,7 @@ export default function AccountsPage() {
               <>
                 <Popconfirm
                   title={`停用「${u.name}」?`}
-                  description="离职冻结:该员工会被立即登出,且无法再登录。"
+                  description="离职冻结:该用户会被立即登出,且无法再登录。"
                   okText="停用"
                   okButtonProps={{ danger: true }}
                   onConfirm={() => handleToggle(u, false)}
@@ -218,10 +218,10 @@ export default function AccountsPage() {
       >
         <Space direction="vertical" size={0}>
           <Typography.Title level={5} style={{ margin: 0 }}>
-            员工账号
+            用户账号
           </Typography.Title>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            管理员通过邮件邀请员工加入;登录后共享同一份产品研究数据。
+            管理员通过邮件邀请用户加入;登录后共享同一份产品研究数据。
           </Typography.Text>
         </Space>
         <Button
@@ -243,7 +243,7 @@ export default function AccountsPage() {
       />
 
       <Modal
-        title="新建员工账号"
+        title="新建用户账号"
         open={createOpen}
         onCancel={() => setCreateOpen(false)}
         onOk={handleCreate}
@@ -255,7 +255,7 @@ export default function AccountsPage() {
           type="info"
           showIcon
           style={{ marginBottom: 16 }}
-          message="创建后系统会发送一封邀请邮件到该邮箱,员工点邮件里的链接自助设置密码(链接 72 小时内有效)。"
+          message="创建后系统会发送一封邀请邮件到该邮箱,用户点邮件里的链接自助设置密码(链接 72 小时内有效)。"
         />
         <Form<UserPayload>
           form={form}
@@ -268,7 +268,7 @@ export default function AccountsPage() {
             label="姓名"
             rules={[{ required: true, whitespace: true, message: '请输入姓名' }]}
           >
-            <Input placeholder="员工姓名" maxLength={255} autoFocus />
+            <Input placeholder="用户姓名" maxLength={255} autoFocus />
           </Form.Item>
           <Form.Item
             name="email"

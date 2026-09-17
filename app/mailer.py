@@ -137,7 +137,7 @@ def _display(name: str) -> str:
 
 
 def send_user_invite(email: str, name: str, raw_token: str) -> None:
-    """员工账号创建后发邀请:点链接自设初始密码(链接 72 小时内一次性有效)。"""
+    """用户账号创建后发邀请:点链接自设初始密码(链接 72 小时内一次性有效)。"""
     link = f"{app_base_url()}/set-password?token={raw_token}"
     _send(
         email,

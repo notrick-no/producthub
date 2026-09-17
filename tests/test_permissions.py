@@ -22,6 +22,10 @@ def _comment(author_id: int | None) -> models.Comment:
     )
 
 
+def _conversation(created_by: int) -> models.AiConversation:
+    return models.AiConversation(title="会话", created_by=created_by)
+
+
 class CanDeleteCommentTest(unittest.TestCase):
     """一行的三个人:作者本人、别的员工、管理员。"""
 
@@ -49,6 +53,45 @@ class CanDeleteCommentTest(unittest.TestCase):
         self.assertFalse(
             permissions.can_delete_comment(_user(1, "employee"), _comment(None))
         )
+
+
+class CanViewAiConversationTest(unittest.TestCase):
+    """AI 会话**只本人可见** —— 这一条与 can_view_post 故意相反。
+
+    博客是写给全公司看的,草稿只是还没写完;AI 会话是一个人问问题的方式,
+    没有任何人是「为了给别人看」才去问的。所以这里管理员**必须**是 False。
+    """
+
+    def test_creator_can_view(self):
+        self.assertTrue(
+            permissions.can_view_ai_conversation(_user(7, "employee"), _conversation(7))
+        )
+
+    def test_other_user_cannot_view(self):
+        self.assertFalse(
+            permissions.can_view_ai_conversation(_user(8, "employee"), _conversation(7))
+        )
+
+    def test_admin_cannot_view_someone_elses(self):
+        """最容易写错的一条:顺手写成 `or user.role == "admin"` 就没了。"""
+        self.assertFalse(
+            permissions.can_view_ai_conversation(_user(9, "admin"), _conversation(7))
+        )
+
+    def test_admin_can_view_own(self):
+        self.assertTrue(
+            permissions.can_view_ai_conversation(_user(9, "admin"), _conversation(9))
+        )
+
+
+class CanManageAiSettingsTest(unittest.TestCase):
+    """限额是管理员管的旋钮 —— 与「看别人的对话」是两件事。"""
+
+    def test_admin_can_manage(self):
+        self.assertTrue(permissions.can_manage_ai_settings(_user(1, "admin")))
+
+    def test_employee_cannot_manage(self):
+        self.assertFalse(permissions.can_manage_ai_settings(_user(2, "employee")))
 
 
 if __name__ == "__main__":

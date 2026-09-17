@@ -22,8 +22,10 @@ from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 
 from app.bootstrap import ensure_bootstrap_admin
+from app.ai_agent import sweep_stale_runs
 from app.db import SessionLocal
 from app.routers import (
+    ai,
     auth,
     blog,
     categories,
@@ -42,6 +44,8 @@ async def lifespan(_app: FastAPI):
     # 空库且 env 配了 ADMIN_EMAIL/ADMIN_PASSWORD → 建首个管理员(幂等,见 app/bootstrap.py)
     with SessionLocal() as db:
         ensure_bootstrap_admin(db)
+    # 上一次进程被杀时留在 running 的 AI 回答,在这里收尾(见 app/ai_agent.py)
+    sweep_stale_runs()
     yield
 
 
@@ -55,6 +59,7 @@ app.include_router(users.router)
 app.include_router(comments.router)  # 评论 / 点赞(第五版)
 app.include_router(blog.router)  # 博客:帖子 / 标签 / 点赞(第五版)
 app.include_router(home.router)  # 首页动态 / 汇总(第四版)
+app.include_router(ai.router)  # AI 问答(第六版)
 
 
 @app.get("/api/health")

@@ -8,6 +8,8 @@ import {
   LogoutOutlined,
   ProfileOutlined,
   ReadOutlined,
+  RobotOutlined,
+  SettingOutlined,
   TeamOutlined,
 } from '@ant-design/icons'
 import { useAuth } from '../auth/AuthContext'
@@ -20,7 +22,7 @@ const BRAND = '#2464e4'
 
 /**
  * 侧栏固定导航(第四版:侧栏不再罗列分类,分类筛选下放到产品分析页;
- * 第五版加博客)。
+ * 第五版加博客;第六版加 AI)。
  *
  * ⚠️ **加一项要同时改这里和 `navKeyFor()`**。只改这个数组的话,新入口点得进去、
  * 菜单也会多出来,但那个页面不高亮 —— 因为高亮由 navKeyFor 的返回值决定,
@@ -31,6 +33,7 @@ const NAV_ITEMS: MenuProps['items'] = [
   { key: '/products', icon: <AppstoreOutlined />, label: '产品分析' },
   { key: '/requirements', icon: <ProfileOutlined />, label: '需求记录' },
   { key: '/blog', icon: <ReadOutlined />, label: '博客' },
+  { key: '/ai', icon: <RobotOutlined />, label: 'AI 助手' },
 ]
 
 /** 当前路径属于导航里的哪一项;不在导航里的页面(如账号管理)不高亮任何一项。 */
@@ -39,6 +42,10 @@ function navKeyFor(pathname: string): string | undefined {
   if (pathname.startsWith('/products')) return '/products'
   if (pathname.startsWith('/requirements')) return '/requirements'
   if (pathname.startsWith('/blog')) return '/blog'
+  // 这里**判等而不是 startsWith**:`/ai` 自己没有子路由,但 `/ai/settings`
+  // (管理员)有 —— startsWith 会让打开设置页时侧栏的「AI 助手」亮着,
+  // 而那两页不是一回事。将来真给对话页加了子路由再改成 startsWith。
+  if (pathname === '/ai') return '/ai'
   return undefined
 }
 
@@ -56,7 +63,12 @@ export default function AppLayout() {
 
   const userMenuItems: MenuProps['items'] = [
     ...(user?.role === 'admin'
-      ? [{ key: 'accounts', icon: <TeamOutlined />, label: '账号管理' }]
+      ? [
+          { key: 'accounts', icon: <TeamOutlined />, label: '账号管理' },
+          // AI 设置挂在这里而不是侧栏 —— 侧栏是「所有人都用的功能」,
+          // 而限额是管理员一个人的旋钮。同「账号管理」一个入口,不新增侧栏项。
+          { key: 'ai-settings', icon: <SettingOutlined />, label: 'AI 设置' },
+        ]
       : []),
     { key: 'password', icon: <KeyOutlined />, label: '修改密码' },
     { type: 'divider' as const },
@@ -66,6 +78,8 @@ export default function AppLayout() {
   const handleUserMenu: MenuProps['onClick'] = async ({ key }) => {
     if (key === 'accounts') {
       navigate('/users')
+    } else if (key === 'ai-settings') {
+      navigate('/ai/settings')
     } else if (key === 'password') {
       navigate('/change-password')
     } else if (key === 'logout') {
@@ -83,8 +97,9 @@ export default function AppLayout() {
           background: '#fff',
           borderBottom: '1px solid #f0f0f0',
           padding: '0 24px',
-          height: 56,
-          lineHeight: '56px',
+          // 这两个值同时被 index.css 的 :root 和撑满一屏的页面用着(见下面 Content 的注释)
+          height: 'var(--app-header-h)',
+          lineHeight: 'var(--app-header-h)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
@@ -127,7 +142,13 @@ export default function AppLayout() {
           />
         </Sider>
 
-        <Content style={{ padding: 24, maxWidth: 1100 }}>
+        {/* 撑满一屏的页面(AI 对话页)要用 `calc(100dvh - 顶栏高 - 内容区上下内边距)`
+            自己算高度,所以这三个尺寸抽成了 CSS 变量,和顶栏共用同一份 ——
+            改这里的数字要改 index.css 的 :root,否则两边会悄悄错开。
+            ⚠️ 别改成「给 Content 加 display:flex 让子元素 flex:1 撑满」:内容一旦高过
+            视口,整条链上的高度都会退化成「由内容决定」,flex 和百分比就都拿不到确定高度,
+            滚动区永远不会滚(实测过)。 */}
+        <Content style={{ padding: 'var(--app-content-pad)', maxWidth: 1100 }}>
           <Outlet />
         </Content>
       </Layout>

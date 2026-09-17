@@ -30,7 +30,7 @@ export interface LoginPayload {
   password: string
 }
 
-/** 管理员创建员工账号(POST /api/users)。邮箱即唯一登录 ID。 */
+/** 管理员创建用户账号(POST /api/users)。邮箱即唯一登录 ID。 */
 export interface UserPayload {
   name: string
   email: string
@@ -294,3 +294,143 @@ export interface BlogPostPayload {
   tag_ids?: number[]
   status?: BlogStatus
 }
+
+// ---------- AI 助手(第六版)----------
+// 与后端 schemas.Ai* / models.Ai* 对齐。
+
+/** 单个提问的长度上限,与后端 schemas.AI_QUESTION_MAX_LEN 一致(4000)。 */
+export const AI_QUESTION_MAX_LEN = 4000
+
+/** 限额旋钮的取值范围,与后端 schemas.AiSettingsUpdate 的 Field 约束一致。
+ * 前端也校一遍是为了把错拦在提交之前 —— 后端仍然会再校一次,那不重复。 */
+export const AI_DAILY_MIN = 1
+export const AI_DAILY_MAX = 1000
+export const AI_MAX_TOKENS_MIN = 256
+export const AI_MAX_TOKENS_MAX = 32000
+export const AI_BUDGET_MAX = 1_000_000_000
+
+/** 助手行的状态。`running` 只在流进行中短暂存在(库里先落一条占位,结束时改写)。 */
+export const AI_MESSAGE_STATUS_TEXT: Record<string, string> = {
+  running: '生成中',
+  done: '已完成',
+  failed: '失败',
+  interrupted: '已中断',
+}
+
+/** 状态的中文名。**未知值原样返回** —— 后端将来加一个新状态时,
+ * 页面应该显示那个字符串,而不是显示 `undefined`。 */
+export function aiStatusText(status: string): string {
+  return AI_MESSAGE_STATUS_TEXT[status] ?? status
+}
+
+/** 一次工具调用在轨迹里的一行。`preview` 是**截断过的**结果预览:
+ * 完整结果是模型上下文,后端不往前端推(见 app/ai_agent.py)。 */
+export interface AiToolCall {
+  name: string
+  args: Record<string, unknown>
+  ok: boolean
+  preview: string
+}
+
+/** 一轮(模型思考 + 它调的那批工具)。`reasoning` 同样被截断。 */
+export interface AiToolRound {
+  round: number
+  reasoning: string
+  calls: AiToolCall[]
+}
+
+export interface AiMessage {
+  id: number
+  /** 库里是自由字符串,实际只会是这两种。 */
+  role: 'user' | 'assistant'
+  content: string
+  /** null = 当时协议里**没有**这个字段;'' = 有但是空。前端两者都当「没有思考过程」。 */
+  reasoning_content?: string | null
+  tool_trace?: AiToolRound[] | null
+  prompt_tokens?: number | null
+  completion_tokens?: number | null
+  status: string
+  error?: string | null
+  created_at: string
+}
+
+export interface AiConversation {
+  id: number
+  title: string
+  message_count: number
+  created_at: string
+  updated_at: string
+}
+
+export interface AiConversationDetail extends AiConversation {
+  messages: AiMessage[]
+}
+
+/** GET /api/ai/status:当前用户此刻能不能问、还能问几问。 */
+export interface AiStatus {
+  /** 部署状态:有没有配 key。false 时整页给「未配置」而不是报错。 */
+  configured: boolean
+  /** 管理员的开关。与 configured 是两件事,提示的话术不一样。 */
+  enabled: boolean
+  model: string
+  daily_questions_per_user: number
+  asked_today: number
+  remaining_today: number
+  /** null = **不限**(是明确的选择,不是「还没设置」) */
+  monthly_token_budget: number | null
+  month_tokens_used: number
+  month_budget_exceeded: boolean
+}
+
+export interface AiSettings {
+  enabled: boolean
+  monthly_token_budget: number | null
+  daily_questions_per_user: number
+  max_tokens_per_call: number
+  /** 从没保存过时为 null(那时返回的是默认值) */
+  updated_at: string | null
+}
+
+/** PUT /api/ai/settings 的请求体:**全量提交**,四个旋钮一起写。 */
+export interface AiSettingsPayload {
+  enabled: boolean
+  monthly_token_budget: number | null
+  daily_questions_per_user: number
+  max_tokens_per_call: number
+}
+
+/** 用量报表里的一行(按人)。**只有数字,没有内容**。 */
+export interface AiUsageUser {
+  user_id: number | null
+  name: string
+  questions_today: number
+  tokens_this_month: number
+}
+
+export interface AiUsage {
+  month_tokens_used: number
+  monthly_token_budget: number | null
+  daily_questions_per_user: number
+  users: AiUsageUser[]
+}
+
+/** `done` 事件里带的用量。 */
+export interface AiTurnUsage {
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+  elapsed_ms: number
+}
+
+/**
+ * SSE 事件。与 app/ai_agent.py 文件头那份清单逐条对齐 ——
+ * **两边改一处就必须改另一处**,所以这里把事件名写全,不留「大概是这样」。
+ */
+export type AiEvent =
+  | { type: 'start'; message_id: number; title: string | null }
+  | { type: 'reasoning_delta'; text: string }
+  | { type: 'content_delta'; text: string }
+  | { type: 'tool'; name: string; args: Record<string, unknown> }
+  | { type: 'tool_result'; name: string; ok: boolean; preview: string }
+  | { type: 'done'; message_id: number; usage: AiTurnUsage }
+  | { type: 'error'; detail: string }

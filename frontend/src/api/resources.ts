@@ -1,8 +1,15 @@
 /** 业务资源 API:统一走 client.ts 的封装。 */
 
-import { del, get, patch, post, postForm } from './client'
+import { del, get, patch, post, postForm, postStream, put } from './client'
 import type {
   ActivityEvent,
+  AiConversation,
+  AiConversationDetail,
+  AiEvent,
+  AiSettings,
+  AiSettingsPayload,
+  AiStatus,
+  AiUsage,
   BlogPost,
   BlogPostPayload,
   BlogTag,
@@ -235,4 +242,65 @@ export function updateBlogTag(id: number, payload: BlogTagPayload): Promise<Blog
 
 export function deleteBlogTag(id: number): Promise<void> {
   return del(`/blog/tags/${id}`)
+}
+
+// ---------- AI 助手(第六版)----------
+// **整组不进 crud<T>() 工厂**,而且比评论 / 博客那两组更彻底:这里的形状没有一条
+// 对得上工厂的五个端点 ——
+//   · `ask` 根本不是 JSON 响应,是一个**流**(见 client.ts 的 postStream);
+//   · `/status` / `/settings` / `/usage` 都是**单例**,没有 id,也没有 list;
+//   · 路径是 `/ai/conversations`,与工厂的 `${basePath}/${id}` 拼法对不上。
+// 硬塞进去就得给工厂加一堆 if,那正是那个工厂的注释里写明不要做的事。
+
+/** 当前用户此刻能不能问、还能问几问。页面据此把输入框置灰并给出原因。 */
+export function fetchAiStatus(): Promise<AiStatus> {
+  return get<AiStatus>('/ai/status')
+}
+
+/** 我的会话列表。**只有自己的** —— 管理员也看不到别人的。 */
+export function listAiConversations(): Promise<AiConversation[]> {
+  return get<AiConversation[]>('/ai/conversations')
+}
+
+/** 新建一个空会话。标题是占位,首问之后会被换成问题本身的首句。 */
+export function createAiConversation(): Promise<AiConversation> {
+  return post<AiConversation>('/ai/conversations', {})
+}
+
+/** 会话详情(含全部消息)。别人的会话是 404,不是 403。 */
+export function getAiConversation(id: number): Promise<AiConversationDetail> {
+  return get<AiConversationDetail>(`/ai/conversations/${id}`)
+}
+
+/** 删会话 —— 硬删,消息一起走(与评论的「墓碑」不同)。 */
+export function deleteAiConversation(id: number): Promise<void> {
+  return del(`/ai/conversations/${id}`)
+}
+
+/**
+ * 提问,**流式**。返回的异步生成器每个事件 yield 一个 `AiEvent`。
+ *
+ * `signal` 给「停止生成」按钮用;调用方也可以直接 `break`(效果一样,见 postStream)。
+ */
+export function askAi(
+  conversationId: number,
+  content: string,
+  signal?: AbortSignal,
+): AsyncGenerator<AiEvent> {
+  return postStream<AiEvent>(`/ai/conversations/${conversationId}/messages`, { content }, { signal })
+}
+
+/** 限额设置(管理员)。表里没行时后端返回**默认值**,不是 404。 */
+export function fetchAiSettings(): Promise<AiSettings> {
+  return get<AiSettings>('/ai/settings')
+}
+
+/** 改限额设置(管理员)。**全量提交** —— 四个旋钮一起写。 */
+export function updateAiSettings(payload: AiSettingsPayload): Promise<AiSettings> {
+  return put<AiSettings>('/ai/settings', payload)
+}
+
+/** 用量报表(管理员)。**只有数字,没有内容** —— 看不到别人问了什么。 */
+export function fetchAiUsage(): Promise<AiUsage> {
+  return get<AiUsage>('/ai/usage')
 }

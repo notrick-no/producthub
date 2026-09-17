@@ -12,8 +12,9 @@
   - PATCH 的 category_ids: 缺席=不动;[] = 清空;[1,2] = 替换
   - monthly_visits 存原始整数,禁止负数
 """
+import json
 from datetime import date, datetime
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, field_validator
 
@@ -229,7 +230,7 @@ def user_read_from_model(user, last_login=None) -> UserRead:
 
 
 class UserCreate(BaseModel):
-    """管理员创建员工账号(POST /api/users)。邮箱即唯一登录 ID。"""
+    """管理员创建用户账号(POST /api/users)。邮箱即唯一登录 ID。"""
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
@@ -479,3 +480,152 @@ class BlogPostRead(BaseModel):
     liked_by_me: bool = False
     created_at: datetime
     updated_at: datetime
+
+
+# ---------- AI(第六版)----------
+
+# 单个提问的长度上限。和评论一样,只是挡住「把整个文件粘进输入框」。
+AI_QUESTION_MAX_LEN = 4000
+
+# AI 设置表为空时用的默认值。**放在 schemas 里而不是 models 里**:
+# 它们是「接口层在缺省时怎么表现」,不是数据库约束 —— 表里那一行的 server_default
+# 是另一回事(列建出来的时候用)。两者数值相同是巧合,不是必须同步。
+DEFAULT_DAILY_QUESTIONS = 20
+DEFAULT_MAX_TOKENS_PER_CALL = 4096
+
+
+class AiSettingsRead(BaseModel):
+    """AI 的限额设置(管理员可见)。
+
+    `monthly_token_budget` 为 None = **不限**。这不是「还没设置」,是一个明确的选择,
+    所以前端要显示成「不限」而不是「—」。
+    """
+
+    enabled: bool
+    monthly_token_budget: int | None = None
+    daily_questions_per_user: int
+    max_tokens_per_call: int
+    updated_at: datetime | None = None
+
+
+class AiSettingsUpdate(BaseModel):
+    """PUT /api/ai/settings 请求体。**全量提交**(不是 PATCH):四个旋钮是一组,
+    分开改容易改出「开关关了但额度还是旧的」这种半截状态。"""
+
+    enabled: bool
+    # None = 不限。ge=0 挡负数;上限给个宽松的 10 亿,防止有人手滑多打几个 0
+    monthly_token_budget: int | None = Field(default=None, ge=0, le=1_000_000_000)
+    daily_questions_per_user: int = Field(ge=1, le=1000)
+    max_tokens_per_call: int = Field(ge=256, le=32000)
+
+
+class AiStatusRead(BaseModel):
+    """当前用户此刻能不能问、还能问几问。前端据此决定输入框是可用还是给出提示。
+
+    `configured` 是**部署状态**(有没有 key),`enabled` 是**管理员的开关** ——
+    两件事分开报,因为它们要提示的话术和该找的人都不一样。
+    """
+
+    configured: bool
+    enabled: bool
+    model: str
+    daily_questions_per_user: int
+    asked_today: int
+    remaining_today: int
+    monthly_token_budget: int | None = None
+    month_tokens_used: int = 0
+    month_budget_exceeded: bool = False
+
+
+class AiConversationRead(BaseModel):
+    """会话列表里的一行。不含消息 —— 列表不需要,详情才拉。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    title: str
+    message_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+
+class AiMessageRead(BaseModel):
+    """一条消息。
+
+    `tool_trace` 在库里是 **JSON 文本**(见 models.AiMessage),这里解析成结构再给前端 ——
+    前端不该知道它的存储格式,也不该自己 try/except 一个 json.parse。
+
+    `reasoning_content` 为 None = 当时协议里没有这个字段;空串是可能的(有但是空)。
+    前端两者都当「没有思考过程」渲染即可。
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    role: str
+    content: str
+    reasoning_content: str | None = None
+    tool_trace: list[dict[str, Any]] | None = None
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    status: str
+    error: str | None = None
+    created_at: datetime
+
+    @field_validator("tool_trace", mode="before")
+    @classmethod
+    def _parse_trace(cls, value):
+        """库里的 JSON 文本 → 结构。**解析不了就当没有**,不抛异常:
+        这是展示用的字段,一段坏 JSON 不该让整个会话打不开。"""
+        if not value or not isinstance(value, str):
+            return value
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return None
+        return parsed if isinstance(parsed, list) else None
+
+
+class AiConversationDetail(AiConversationRead):
+    """会话详情 = 会话本身 + 全部消息。"""
+
+    messages: list[AiMessageRead] = Field(default_factory=list)
+
+
+class AiConversationCreate(BaseModel):
+    """POST /api/ai/conversations 请求体。
+
+    标题**不在这里定**:它取首问的前若干字(见 routers/ai.py)。让前端先编一个
+    「新会话」再被改掉,只会让列表闪一下。
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    title: str = Field(default="新会话", max_length=255)
+
+
+class AiAskRequest(BaseModel):
+    """POST /api/ai/conversations/{id}/messages 请求体。"""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    content: str = Field(min_length=1, max_length=AI_QUESTION_MAX_LEN)
+
+
+class AiUsageUser(BaseModel):
+    """用量报表里的一行(按人)。**只有数字,没有内容** ——
+    管理员看得到「谁在烧钱」,看不到「他问了什么」(见 permissions.py)。"""
+
+    user_id: int | None
+    name: str
+    questions_today: int
+    tokens_this_month: int
+
+
+class AiUsageRead(BaseModel):
+    """GET /api/ai/usage(管理员)。"""
+
+    month_tokens_used: int
+    monthly_token_budget: int | None = None
+    daily_questions_per_user: int
+    users: list[AiUsageUser] = Field(default_factory=list)

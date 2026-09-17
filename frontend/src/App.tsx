@@ -18,6 +18,8 @@ const RequirementFormPage = lazy(() => import('./pages/RequirementFormPage'))
 const BlogList = lazy(() => import('./pages/BlogList'))
 const BlogDetail = lazy(() => import('./pages/BlogDetail'))
 const BlogFormPage = lazy(() => import('./pages/BlogFormPage'))
+const AiChat = lazy(() => import('./pages/AiChat'))
+const AiSettingsPage = lazy(() => import('./pages/AiSettingsPage'))
 const AccountsPage = lazy(() => import('./pages/AccountsPage'))
 
 function PageFallback() {
@@ -57,15 +59,19 @@ export default function App() {
               <Route path="/requirements/:id" element={<RequirementDetail />} />
               <Route path="/requirements/:id/edit" element={<RequirementFormPage />} />
 
-              {/* 博客:任何登录员工都能写,编辑 / 删除限作者本人或管理员(后端判) */}
+              {/* 博客:任何登录用户都能写,编辑 / 删除限作者本人或管理员(后端判) */}
               <Route path="/blog" element={<BlogList />} />
               <Route path="/blog/new" element={<BlogFormPage />} />
               <Route path="/blog/:id" element={<BlogDetail />} />
               <Route path="/blog/:id/edit" element={<BlogFormPage />} />
 
-              {/* 账号管理:仅管理员 */}
+              {/* AI 助手:任何登录用户都能用。会话**只自己可见**,管理员也打不开。 */}
+              <Route path="/ai" element={<AiChat />} />
+
+              {/* 账号管理 / AI 设置:仅管理员 */}
               <Route element={<RequireAdmin />}>
                 <Route path="/users" element={<AccountsPage />} />
+                <Route path="/ai/settings" element={<AiSettingsPage />} />
               </Route>
             </Route>
           </Route>

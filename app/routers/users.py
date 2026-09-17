@@ -1,7 +1,7 @@
 """管理员账号管理(整个 router 都要求 admin 角色)。
 
-员工账号流程:
-  创建(POST)  → 生成一次性邀请 token(72h)并发邀请邮件,员工点链接自设密码;
+用户账号流程:
+  创建(POST)  → 生成一次性邀请 token(72h)并发邀请邮件,用户点链接自设密码;
   重置密码    → 生成临时密码发邮件 + must_change_password=True(强制下次登录改)+ 踢掉全部会话;
   启停(PATCH) → is_active=False 即离职冻结,立即踢下线。
 
@@ -87,7 +87,7 @@ def list_users(db: Session = Depends(get_db)):
 
 @router.post("/users", response_model=UserRead, status_code=201)
 def create_user(body: UserCreate, db: Session = Depends(get_db)):
-    """创建员工账号并发送邀请邮件(邮件没发成功则整体回滚,不留半截账号)。"""
+    """创建用户账号并发送邀请邮件(邮件没发成功则整体回滚,不留半截账号)。"""
     _require_mail_configured("邀请")
 
     user = User(
@@ -121,7 +121,7 @@ def create_user(body: UserCreate, db: Session = Depends(get_db)):
 @router.patch("/users/{user_id}", response_model=UserRead)
 def update_user(user_id: int, body: UserUpdate, db: Session = Depends(get_db)):
     """部分更新:本期支持 name / department / is_active。缺席的键不改。"""
-    user = crud.get_or_404(db, User, user_id, "员工")
+    user = crud.get_or_404(db, User, user_id, "用户")
 
     data = body.model_dump(exclude_unset=True)
 
@@ -148,7 +148,7 @@ def update_user(user_id: int, body: UserUpdate, db: Session = Depends(get_db)):
 @router.post("/users/{user_id}/reset-password")
 def reset_password(user_id: int, db: Session = Depends(get_db)):
     """重置为随机临时密码 → 发邮件 + 强制下次登录修改 + 踢掉全部会话。"""
-    user = crud.get_or_404(db, User, user_id, "员工")
+    user = crud.get_or_404(db, User, user_id, "用户")
     if _is_last_active_admin(db, user):
         raise HTTPException(
             status_code=400, detail="不能重置最后一个启用管理员的密码"
